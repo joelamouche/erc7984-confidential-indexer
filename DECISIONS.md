@@ -175,7 +175,47 @@ thin faucet balance still gets a working demo.
 hardhat/anvil test phrase — convenient and obviously not a real key. The repo
 never derives or stores a key controlling real funds.
 
-## 8. Where I'd push back on the brief
+## 8. API authentication — out of scope now, designed for later
+
+**Decision:** the read API ships **unauthenticated** for this submission. The brief
+lists API design as "shapes, paths, field names, pagination, error taxonomy" (no
+auth), says "no shared secrets / .env.example only / not testing your ops setup,"
+and asks for something small and sharp. Building real auth would be scope creep on
+the least-evaluated surface.
+
+**Why that's defensible, not careless:** the confidentiality boundary is already
+enforced **on-chain**. The indexer only ever holds cleartext for addresses that
+delegated decrypt rights to the holder, so the API *structurally cannot* reveal a
+confidential balance/amount for a user who never opted in — those rows stay
+`pending_rights`/`null`. The residual risk is only "who may call the service for
+the opted-in users' data," not "leak arbitrary confidential data."
+
+**Potential development for later:**
+
+- **Near-term (service-to-service).** The caller is the wallet's backend, not end
+  users ("the wallet … wants to call your service"). Gate it with a partner
+  credential — an `X-API-Key` (off unless an `API_KEY` env var is set, to keep
+  fresh-clone DX zero-config), upgrading to mTLS or a signed JWT in production.
+  Per-user authentication stays the wallet's responsibility.
+
+- **Fuller model (per-user accounts).** When the service is consumed by end users
+  directly:
+  1. **Authenticate** the user (Sign-In-With-Ethereum / a signed nonce) → issue a
+     session and create a **profile** row.
+  2. **Link addresses by signature.** The user claims each address by submitting an
+     EIP-191/712 signature proving control; the service verifies it and stores
+     `(user_id, address, verified_at)` in a `user_addresses` table.
+  3. **Scope every response** to the requesting user's *verified* addresses. A user
+     only sees data for addresses they've proven they own.
+
+  Visibility then becomes the intersection of two independent gates: **ownership**
+  (auth: addresses the user proved) ∩ **decrypt-rights** (ACL: addresses the holder
+  can decrypt). These `profiles` / `user_addresses` tables are **off-chain** (not
+  reorg-derived), so they live in a separate auth store / plain Postgres tables
+  written by the API — *not* Ponder `onchainTable`s, consistent with the
+  indexer-owns-onchain-tables rule in [`docs/INDEXER.md`](./docs/INDEXER.md#4-the-database-tables-our-customization-of-ponders-db).
+
+## 9. Where I'd push back on the brief
 
 - "Current cleartext balance **for an address**" assumes the indexer can decrypt
   arbitrary addresses. It structurally can't — ACL rights are per-handle and only
@@ -191,7 +231,7 @@ never derives or stores a key controlling real funds.
 
 ---
 
-## 9. Reflection — least-confident component under partner load
+## 10. Reflection — least-confident component under partner load
 
 The **backfill decryption tick** (the `block`-interval handler that drains
 `pending_*` rows through the gateway). The indexer itself is cheap and Ponder
@@ -207,13 +247,13 @@ concurrency mitigations, and the Postgres + worker-fleet scale-out path are in
 This is also exactly why decryption is **decoupled** from the transfer handler
 (§4) rather than run inline.
 
-## 10. Reflection — what I cut, and the next four hours
+## 11. Reflection — what I cut, and the next four hours
 
 _(to be completed — running list of cuts as they happen: e.g. per-user identity
 management, websocket/subscription API, auth on the read API, multi-token support,
 metrics/observability beyond /health. Plus the ordered "next 4h" list.)_
 
-## 11. SDK feedback (concrete, design-review-shaped)
+## 12. SDK feedback (concrete, design-review-shaped)
 
 _(to be completed after a few hours of real use — seeded candidates from initial
 grounding, to be confirmed/reprioritised against actual integration pain:)_
@@ -228,7 +268,7 @@ grounding, to be confirmed/reprioritised against actual integration pain:)_
   self-registering `node()` transport is easy to wire wrong with no clear error.
   _(change / scenario / priority.)_
 
-## 12. AI assistance
+## 13. AI assistance
 
 I used **Claude Code** (this submission's authoring environment) throughout, as a
 daily-driver agentic tool. Process and the specific subtly-wrong thing it produced
