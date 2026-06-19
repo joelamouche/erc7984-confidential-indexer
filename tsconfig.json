@@ -13,5 +13,5 @@
     "noEmit": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["src", "scripts", "test", "ponder.config.ts", "ponder.schema.ts"]
+  "include": ["src", "scripts", "test", "ponder.config.ts", "ponder.schema.ts", "ponder-env.d.ts"]
 }
