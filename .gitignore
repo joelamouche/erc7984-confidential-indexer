@@ -1,0 +1,31 @@
+# Secrets — never commit real keys
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Ponder
+.ponder/
+generated/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Foundry / contracts
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log

@@ -1,0 +1,31 @@
+{
+  "name": "erc7984-confidential-indexer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Confidential indexer for an ERC-7984 token: auto-decrypts transfer amounts via @zama-fhe/sdk and serves a cleartext ERC-20-style read API.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "ponder dev",
+    "start": "ponder start",
+    "codegen": "ponder codegen",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:contracts": "forge test --root contracts"
+  },
+  "dependencies": {
+    "@zama-fhe/sdk": "3.1.0-alpha.15",
+    "ponder": "0.16.6",
+    "viem": "^2.52.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.9"
+  }
+}
