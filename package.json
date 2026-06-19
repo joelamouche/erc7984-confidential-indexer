@@ -13,18 +13,22 @@
     "start": "ponder start",
     "codegen": "ponder codegen",
     "typecheck": "tsc --noEmit",
+    "accounts": "tsx scripts/accounts.ts",
+    "fund": "tsx scripts/fund.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:contracts": "forge test --root contracts"
   },
   "dependencies": {
     "@zama-fhe/sdk": "3.1.0-alpha.15",
+    "dotenv": "^16.4.7",
     "ponder": "0.16.6",
     "viem": "^2.52.2",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.0",
     "vitest": "^4.1.9"
   }
