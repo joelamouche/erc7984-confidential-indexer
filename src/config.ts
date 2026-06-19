@@ -46,6 +46,8 @@ const EnvSchema = z.object({
   // Contracts (token/wrapper filled in after deploy)
   TOKEN_ADDRESS: optionalAddress,
   WRAPPER_ADDRESS: optionalAddress,
+  // Cleartext ERC20 underlying the wrapper (ToyUSD) — used by seed scripts, not indexed.
+  UNDERLYING_USD_ADDRESS: optionalAddress,
   START_BLOCK: z.coerce.number().int().nonnegative().default(0),
   ACL_ADDRESS: addressSchema.default("0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D"),
 

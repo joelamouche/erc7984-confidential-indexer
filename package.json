@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "accounts": "tsx scripts/accounts.ts",
     "fund": "tsx scripts/fund.ts",
+    "deploy": "tsx scripts/deploy.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:contracts": "forge test --root contracts"
