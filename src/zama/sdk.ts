@@ -19,12 +19,15 @@ let sdk: ZamaSDK | undefined;
 
 export function getZamaSdk(): ZamaSDK {
   if (sdk) return sdk;
-  const fheChain = { ...zamaSepolia, network: env.SEPOLIA_RPC_URL } as FheChain;
-  const publicClient = createPublicClient({ chain, transport: http(env.SEPOLIA_RPC_URL) });
+  // Decryption uses its own RPC (see DECRYPT_RPC_URL) so its bursty batched calls
+  // don't fight the indexer's eth_getLogs load on a single throttled endpoint.
+  const rpc = env.DECRYPT_RPC_URL ?? env.SEPOLIA_RPC_URL;
+  const fheChain = { ...zamaSepolia, network: rpc } as FheChain;
+  const publicClient = createPublicClient({ chain, transport: http(rpc) });
   const walletClient = createWalletClient({
     account: accounts.indexerHolder.account,
     chain,
-    transport: http(env.SEPOLIA_RPC_URL),
+    transport: http(rpc),
   });
   sdk = new ZamaSDK(
     createConfig({

@@ -40,6 +40,9 @@ const EnvSchema = z.object({
 
   // Chain / RPC
   SEPOLIA_RPC_URL: z.string().url(),
+  // Separate RPC for the SDK decryption path (different workload than indexing:
+  // bursty batched eth_calls vs. heavy eth_getLogs). Defaults to SEPOLIA_RPC_URL.
+  DECRYPT_RPC_URL: z.string().url().optional(),
   CHAIN_ID: z.coerce.number().int().positive().default(11155111),
   ETHERSCAN_API_KEY: z.string().default(""),
 

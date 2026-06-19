@@ -127,10 +127,15 @@ keys or funds — the default mnemonic is the public hardhat/anvil test phrase.
 
 ### RPC rate limits
 
-Set `SEPOLIA_RPC_URL` to any Sepolia endpoint. **A free Infura key is enough** —
-its Core plan (6M credits/day, 2,000 credits/sec) far exceeds what indexing one
-contract from its deploy block needs. During the initial historical backfill you
-may see `HttpRequestError` warnings: that's the 2,000 credits/sec *burst* cap, and
-Ponder retries automatically, so it's noise, not failure. A free Alchemy key has a
-higher burst ceiling if you want a quieter log. Decryption talks to the Zama
-gateway, not your RPC, so it doesn't consume RPC credits.
+Set `SEPOLIA_RPC_URL` to any Sepolia endpoint; the default is a public node
+(no key). **Indexing alone is fine on a free Infura key** (Core plan: 6M
+credits/day, 2k credits/sec — far more than indexing one contract needs; the
+`HttpRequestError` warnings during backfill are just the per-second burst cap,
+which Ponder retries automatically).
+
+**But the SDK's decryption path is RPC-heavier than expected:** each decrypt makes
+batched on-chain calls (an ACL delegation check, etc.), and on a free Infura key
+those bursts get `-32005 Too Many Requests`, which surfaces as a confusing
+`DECRYPTION_FAILED`. Use a **public node** (the default) or a **free Alchemy key**
+for the decryption flow — both have enough burst headroom. (Found the hard way;
+noted in DECISIONS as SDK feedback.)
