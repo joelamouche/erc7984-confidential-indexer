@@ -7,12 +7,48 @@
  * holder), batch-decrypt via the SDK, and write cleartext + state back. Idempotent
  * and keyed by the immutable ciphertext handle, so reruns/reorgs are safe.
  */
+import { spawn } from "node:child_process";
+import { resolve as pathResolve } from "node:path";
 import { transfers, balances, delegations } from "ponder:schema";
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import { getAddress, zeroAddress, type Address, type Hex } from "viem";
 import { env } from "./config";
-import { HOLDER, holderDecrypt, delegatedDecrypt } from "./zama/sdk";
-import { errorToState, type DecryptState } from "./zama/state";
+import { HOLDER } from "./zama/sdk";
+import { errorNameToState, type DecryptState } from "./zama/state";
+
+interface SubprocessGroup {
+  delegator: Address | null;
+  handles: Hex[];
+}
+interface SubprocessResult {
+  groups: Array<{ values?: Record<string, string>; errorName?: string }>;
+}
+
+/**
+ * Run decryption in a plain-Node child process (the SDK can't run inside Ponder's
+ * Vite SSR runtime — see scripts/decrypt-handles.ts). One spawn per tick handles
+ * all groups; pipes the job in and parses cleartext out.
+ */
+function runDecryptSubprocess(job: { contractAddress: Address; groups: SubprocessGroup[] }): Promise<SubprocessResult> {
+  return new Promise((resolveP, rejectP) => {
+    const child = spawn(pathResolve("node_modules/.bin/tsx"), ["scripts/decrypt-handles.ts"], {
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    let out = "";
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.on("error", rejectP);
+    child.on("close", (code) => {
+      if (code !== 0) return rejectP(new Error(`decrypt subprocess exited ${code}`));
+      try {
+        resolveP(JSON.parse(out));
+      } catch (e) {
+        rejectP(e);
+      }
+    });
+    child.stdin.write(JSON.stringify(job));
+    child.stdin.end();
+  });
+}
 
 const BATCH = 25;
 const BACKOFF_SECONDS = 60n;
@@ -97,7 +133,7 @@ async function backfillBalances(db: any, token: Address, blockTime: bigint, acti
   await decryptItems(token, activeDelegators, items, update);
 }
 
-/** Route items to a decrypt path, batch per path, decrypt, and write results back. */
+/** Route items to a decrypt path, batch per path, decrypt out-of-process, write back. */
 async function decryptItems(token: Address, activeDelegators: Set<Address>, items: Item[], update: Update) {
   const holderGroup: Item[] = [];
   const delegatedGroups = new Map<Address, Item[]>();
@@ -121,30 +157,38 @@ async function decryptItems(token: Address, activeDelegators: Set<Address>, item
   // No rights: don't call the gateway — just record the attempt (stays pending_rights).
   for (const it of noRights) await update(it.id, { state: "pending_rights", via: null });
 
-  if (holderGroup.length) {
-    await runGroup(holderGroup, () => holderDecrypt(handles(holderGroup), token), "holder", update);
-  }
-  for (const [delegator, group] of delegatedGroups) {
-    await runGroup(group, () => delegatedDecrypt(handles(group), token, delegator), "delegation", update);
-  }
-}
+  // Build one job (holder group + a group per delegator) and decrypt in one spawn.
+  const groups: Array<{ delegator: Address | null; via: string; items: Item[] }> = [];
+  if (holderGroup.length) groups.push({ delegator: null, via: "holder", items: holderGroup });
+  for (const [delegator, group] of delegatedGroups) groups.push({ delegator, via: "delegation", items: group });
+  if (groups.length === 0) return;
 
-async function runGroup(
-  group: Item[],
-  call: () => Promise<Record<Hex, bigint>>,
-  via: string,
-  update: Update,
-) {
+  let result: SubprocessResult;
   try {
-    const result = await call();
-    for (const it of group) {
-      const cleartext = result[it.handle];
-      if (cleartext !== undefined) await update(it.id, { amount: cleartext, state: "decrypted", via });
-      else await update(it.id, { state: "pending_rights", via: null });
-    }
+    result = await runDecryptSubprocess({
+      contractAddress: token,
+      groups: groups.map((g) => ({ delegator: g.delegator, handles: handles(g.items) })),
+    });
   } catch (err) {
-    const state = errorToState(err);
-    for (const it of group) await update(it.id, { state, via: null });
+    console.warn("[backfill] decrypt subprocess failed:", (err as Error)?.message ?? err);
+    for (const g of groups) for (const it of g.items) await update(it.id, { state: "failed", via: null });
+    return;
+  }
+
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i]!;
+    const r = result.groups[i];
+    if (r?.values) {
+      for (const it of g.items) {
+        const cv = r.values[it.handle];
+        if (cv !== undefined) await update(it.id, { amount: BigInt(cv), state: "decrypted", via: g.via });
+        else await update(it.id, { state: "pending_rights", via: null });
+      }
+    } else {
+      const state = errorNameToState(r?.errorName);
+      console.warn(`[backfill] ${g.via} decrypt of ${g.items.length} -> ${state} (${r?.errorName})`);
+      for (const it of g.items) await update(it.id, { state, via: null });
+    }
   }
 }
 

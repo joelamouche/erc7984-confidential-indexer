@@ -25,3 +25,21 @@ export function errorToState(err: unknown): DecryptState {
   // RelayerRequestFailed / DecryptionFailed / unknown → transient, back off.
   return "failed";
 }
+
+/**
+ * Same mapping by error class NAME — used when decryption runs out-of-process
+ * (the SDK can't run inside Ponder's Vite SSR runtime; see docs/INDEXER.md §5),
+ * so error instances don't survive the process boundary.
+ */
+export function errorNameToState(name: string | undefined): DecryptState {
+  switch (name) {
+    case "NoCiphertextError":
+    case "DelegationNotFoundError":
+    case "DelegationExpiredError":
+      return "pending_rights";
+    case "DelegationNotPropagatedError":
+      return "pending_propagation";
+    default:
+      return "failed";
+  }
+}
