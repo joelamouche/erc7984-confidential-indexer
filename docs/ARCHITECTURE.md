@@ -228,6 +228,6 @@ src/
   backfill/worker.ts      drain pending_* rows; re-check delegations
   api/index.ts            Hono read routes + error taxonomy
   config.ts               env parsing/validation
-scripts/                  seed transfers / grant-delegation demo
+scripts/                  fund (funder -> actors), seed transfers, grant-delegation demo
 test/                     happy-path + one negative test
 ```

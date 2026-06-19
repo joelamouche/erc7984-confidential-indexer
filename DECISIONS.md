@@ -149,7 +149,33 @@ says storage choice is explicitly not graded ("not testing your ops setup"), so 
 optimise for zero-setup-on-fresh-clone over production-shaped infra. Postgres is a
 one-env-var swap if needed.
 
-## 7. Where I'd push back on the brief
+## 7. Test accounts: one HD mnemonic, role-indexed, with a funder fan-out
+
+**Decision:** every actor — funder, deployer, indexer holder, and N test users —
+derives from a **single HD mnemonic** at fixed BIP-44 indices, rather than a
+grab-bag of `*_PRIVATE_KEY` env vars. A `scripts/fund.ts` reads the **funder**
+(index 0, the only address you top up from a faucet) and fans out role-appropriate
+gas to the rest.
+
+**Why:** (a) one secret instead of five, and no raw private keys in `.env`;
+(b) deterministic, reproducible actors — the same mnemonic yields the same Alice,
+Bob, deployer everywhere (the script, the seed data, the tests), which makes the
+"realistic multi-party activity" the demo needs trivial to regenerate from a fresh
+clone; (c) it matches how Foundry/anvil already think (`--mnemonic` +
+`--mnemonic-index`), so the contract and TS sides share one account model.
+
+**Role split (see `.env.example`):** deployer is **separate** from the indexer
+holder on purpose — the holder is a pure decryption identity that signs EIP-712
+off-chain and submits no transactions, so it needs ~no gas; the deployer needs the
+most (FHE-heavy deploys); test users get small amounts sized to what they do
+(transfer / wrap / unwrap / delegate). Funding amounts are env-configurable so a
+thin faucet balance still gets a working demo.
+
+**Boundary kept:** the default mnemonic in `.env.example` is the public
+hardhat/anvil test phrase — convenient and obviously not a real key. The repo
+never derives or stores a key controlling real funds.
+
+## 8. Where I'd push back on the brief
 
 - "Current cleartext balance **for an address**" assumes the indexer can decrypt
   arbitrary addresses. It structurally can't — ACL rights are per-handle and only
@@ -165,7 +191,7 @@ one-env-var swap if needed.
 
 ---
 
-## 8. Reflection — least-confident component under partner load
+## 9. Reflection — least-confident component under partner load
 
 _(to be completed after implementation — candidate as of design: the
 decrypt-on-index path inside the Ponder event handler. Decryption is a
@@ -174,13 +200,13 @@ under a burst of transfers this serialises indexing behind network latency and
 rate limits. Hypothesis for what breaks first and how I'd prove it to be filled
 in with the real handler + a load probe.)_
 
-## 9. Reflection — what I cut, and the next four hours
+## 10. Reflection — what I cut, and the next four hours
 
 _(to be completed — running list of cuts as they happen: e.g. per-user identity
 management, websocket/subscription API, auth on the read API, multi-token support,
 metrics/observability beyond /health. Plus the ordered "next 4h" list.)_
 
-## 10. SDK feedback (concrete, design-review-shaped)
+## 11. SDK feedback (concrete, design-review-shaped)
 
 _(to be completed after a few hours of real use — seeded candidates from initial
 grounding, to be confirmed/reprioritised against actual integration pain:)_
@@ -195,7 +221,7 @@ grounding, to be confirmed/reprioritised against actual integration pain:)_
   self-registering `node()` transport is easy to wire wrong with no clear error.
   _(change / scenario / priority.)_
 
-## 11. AI assistance
+## 12. AI assistance
 
 I used **Claude Code** (this submission's authoring environment) throughout, as a
 daily-driver agentic tool. Process and the specific subtly-wrong thing it produced

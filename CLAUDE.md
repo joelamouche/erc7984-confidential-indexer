@@ -23,8 +23,11 @@ code:
   training data predates this package — **do not write SDK calls from memory;
   verify against [`docs/SDK-NOTES.md`](docs/SDK-NOTES.md)** or the installed
   package / prerelease branch.
-- **No real keys, funds, or secrets.** EOA test keys and toy values only.
-  `.env.example` lists every variable; never commit a real `.env`.
+- **No real keys, funds, or secrets.** All actors derive from a single HD
+  **mnemonic** (role-indexed: funder=0, deployer=1, indexer holder=2, test
+  users=3+); `scripts/fund.ts` fans gas from the funder. Default is the public
+  hardhat/anvil test phrase — never a seed controlling real funds. `.env.example`
+  lists every variable; never commit a real `.env`.
 - **Scope:** ~3–4 focused hours. Favor a small, sharp submission with strong
   trade-off notes over breadth. If something balloons, write the reasoning into
   `DECISIONS.md` and cut it.

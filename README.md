@@ -51,7 +51,7 @@ reference (the brief warns LLM training data predates this package).
 git clone https://github.com/joelamouche/erc7984-confidential-indexer.git
 cd erc7984-confidential-indexer
 npm install
-cp .env.example .env        # fill in SEPOLIA_RPC_URL, INDEXER_HOLDER_PRIVATE_KEY, TOKEN_ADDRESS, ...
+cp .env.example .env        # set SEPOLIA_RPC_URL; MNEMONIC defaults to a test phrase; TOKEN_ADDRESS filled after deploy
 ```
 
 ### Run the indexer + API
@@ -93,5 +93,7 @@ DECISIONS.md trade-offs, reflection, SDK feedback, AI-assistance notes
 ## Environment
 
 Every variable the service reads is documented in
-[`.env.example`](.env.example). No real keys or funds — Sepolia EOA test keys
-only.
+[`.env.example`](.env.example). All actors (funder, deployer, indexer holder,
+test users) derive from **one HD mnemonic** at fixed indices; `scripts/fund.ts`
+tops the others up from the funder (index 0, the only address you faucet). No real
+keys or funds — the default mnemonic is the public hardhat/anvil test phrase.
