@@ -16,6 +16,7 @@
     "accounts": "tsx scripts/accounts.ts",
     "fund": "tsx scripts/fund.ts",
     "deploy": "tsx scripts/deploy.ts",
+    "seed": "tsx scripts/seed.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:contracts": "forge test --root contracts"
@@ -23,6 +24,8 @@
   "dependencies": {
     "@zama-fhe/sdk": "3.1.0-alpha.15",
     "dotenv": "^16.4.7",
+    "drizzle-orm": "0.41.0",
+    "hono": "4.12.26",
     "ponder": "0.16.6",
     "viem": "^2.52.2",
     "zod": "^4.4.3"
