@@ -193,12 +193,19 @@ never derives or stores a key controlling real funds.
 
 ## 9. Reflection — least-confident component under partner load
 
-_(to be completed after implementation — candidate as of design: the
-decrypt-on-index path inside the Ponder event handler. Decryption is a
-synchronous-looking `await` over an async gateway call inside the indexing loop;
-under a burst of transfers this serialises indexing behind network latency and
-rate limits. Hypothesis for what breaks first and how I'd prove it to be filled
-in with the real handler + a load probe.)_
+The **backfill decryption tick** (the `block`-interval handler that drains
+`pending_*` rows through the gateway). The indexer itself is cheap and Ponder
+carries it; decryption is the scarce, network-bound, rate-limited resource. Under
+a partner whose transfer volume outruns decrypt throughput, the `pending_*`
+backlog grows unbounded and `/v1/health` shows rising `secondsBehind` + backlog
+counts — that's what breaks first, and it's a *gateway-throughput* limit, not a
+Ponder one. I'd prove it with a load probe: seed K transfers/min, watch backlog
+depth and decrypt latency, and find the rate at which the backlog stops draining —
+that number is the single-process ceiling. Full analysis, the batching/bounded-
+concurrency mitigations, and the Postgres + worker-fleet scale-out path are in
+[`docs/INDEXER.md` §6](./docs/INDEXER.md#6-designing-for-scale--and-what-the-brief-actually-asks).
+This is also exactly why decryption is **decoupled** from the transfer handler
+(§4) rather than run inline.
 
 ## 10. Reflection — what I cut, and the next four hours
 

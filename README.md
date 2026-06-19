@@ -63,15 +63,20 @@ npm run dev        # starts Ponder: indexes from START_BLOCK and serves the read
 ### Call the API
 
 ```bash
-# how far behind is the indexer?
-curl localhost:42069/health
+# how far behind is the indexer + decrypt backlog
+curl localhost:42069/v1/health
 
 # current cleartext balance for an address
 curl localhost:42069/v1/tokens/$TOKEN_ADDRESS/balances/$ADDRESS
 
 # transfer history with cleartext amounts where available
 curl "localhost:42069/v1/tokens/$TOKEN_ADDRESS/addresses/$ADDRESS/transfers?limit=20"
+
+# build the unsigned tx a user signs to grant the indexer decrypt rights
+curl -X POST localhost:42069/v1/tokens/$TOKEN_ADDRESS/delegations/quote
 ```
+
+(Ponder also mounts its own `/health`, `/ready`, and `/status` on the same port.)
 
 ### Tests
 
@@ -83,12 +88,34 @@ npm run test:contracts # forge-fhevm contract tests
 ## Repository layout
 
 ```
-contracts/   toy ERC-7984 token + ERC-20 wrapper (Foundry) + deploy script
-src/         ponder config + schema, event handlers, Zama SDK wiring, backfill worker, API
-test/        happy-path + one negative test
-docs/        CHALLENGE.md (brief), ARCHITECTURE.md, SDK-NOTES.md
-DECISIONS.md trade-offs, reflection, SDK feedback, AI-assistance notes
+contracts/        Foundry: ToyUSD + ConfidentialUSD (ERC-7984 wrapper) + forge-fhevm tests
+ponder.config.ts  chains + indexed contracts (token + ACL, filtered to the holder)
+ponder.schema.ts  database tables (see below)
+src/index.ts      indexing handlers (record every amount with a decryption state)
+src/api/          Hono read API (balances, history, delegations, health)
+src/abis/         vendored event ABIs (topic-exact) so the indexer runs without compiling Solidity
+src/config.ts     env parsing + HD account derivation
+scripts/          accounts, fund, deploy, seed
+docs/             CHALLENGE.md (brief), ARCHITECTURE.md, INDEXER.md, SDK-NOTES.md
+DECISIONS.md      trade-offs, reflection, SDK feedback, AI-assistance notes
 ```
+
+## Database tables
+
+Ponder owns and reorg-manages the database; we define the tables in
+`ponder.schema.ts` (it's [drizzle](https://orm.drizzle.team/) — fully
+customizable). See [`docs/INDEXER.md`](docs/INDEXER.md) for how this is wired and
+how decryption backfills cleartext.
+
+| Table | One row per | Notable columns |
+| --- | --- | --- |
+| `transfers` | transfer / mint / burn / shield / unshield event | `amountHandle` (ciphertext, always set), `amount` (cleartext, when known), `decryptionState`, `kind`, `from`, `to` |
+| `balances` | (token, account) | `balanceHandle`, `balance` (cleartext when entitled), `decryptionState` |
+| `delegations` | (token, delegator) | which addresses granted the holder decrypt rights: `delegator`, `delegate`, `active`, `expiry` |
+
+`decryptionState` (`pending_rights` → `pending_propagation` → `decrypted`, or
+`failed`) appears on every amount-bearing row, so the API never hides an
+undecryptable amount — it reports the state instead.
 
 ## Environment
 
@@ -97,3 +124,13 @@ Every variable the service reads is documented in
 test users) derive from **one HD mnemonic** at fixed indices; `scripts/fund.ts`
 tops the others up from the funder (index 0, the only address you faucet). No real
 keys or funds — the default mnemonic is the public hardhat/anvil test phrase.
+
+### RPC rate limits
+
+Set `SEPOLIA_RPC_URL` to any Sepolia endpoint. **A free Infura key is enough** —
+its Core plan (6M credits/day, 2,000 credits/sec) far exceeds what indexing one
+contract from its deploy block needs. During the initial historical backfill you
+may see `HttpRequestError` warnings: that's the 2,000 credits/sec *burst* cap, and
+Ponder retries automatically, so it's noise, not failure. A free Alchemy key has a
+higher burst ceiling if you want a quieter log. Decryption talks to the Zama
+gateway, not your RPC, so it doesn't consume RPC credits.
