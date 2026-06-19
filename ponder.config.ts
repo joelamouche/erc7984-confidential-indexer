@@ -32,4 +32,13 @@ export default createConfig({
       ],
     },
   },
+  blocks: {
+    // Drives the decryption backfill, decoupled from per-transfer events.
+    // interval 5 ≈ every ~60s on Sepolia — roughly the delegation propagation window.
+    Backfill: {
+      chain: "sepolia",
+      startBlock: env.START_BLOCK,
+      interval: 5,
+    },
+  },
 });

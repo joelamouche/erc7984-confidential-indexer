@@ -57,6 +57,8 @@ export const balances = onchainTable("balances", (t) => ({
   balance: t.bigint(),
   decryptionState: decryptionState().notNull(),
   updatedAtBlock: t.bigint().notNull(),
+  attempts: t.integer().notNull().default(0),
+  lastAttemptAt: t.bigint(),
 }));
 
 /** Delegations granting the indexer holder decrypt rights, from ACL events. */

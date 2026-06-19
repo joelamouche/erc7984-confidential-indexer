@@ -1,15 +1,18 @@
 /**
  * Ponder indexing handlers.
  *
- * Pass 1 (this commit): record events into the schema with explicit decryption
- * state — no amounts dropped. Decryption via @zama-fhe/sdk is layered on top in
- * the next step (the `decryptionState` starts at `pending_rights` and the backfill
- * worker / ACL events promote it). `AmountDisclosed` and `UnwrapFinalized` already
- * give us cleartext straight from the chain with no SDK round-trip.
+ * Indexing stays deterministic and fast: record every event with an explicit
+ * `decryptionState`, never drop an amount. Decryption is decoupled onto the
+ * `Backfill` block interval (src/backfill.ts) so gateway latency never blocks the
+ * indexing loop. `AmountDisclosed`/`UnwrapFinalized` give cleartext from chain with
+ * no SDK round-trip. See docs/INDEXER.md §5.
  */
 import { ponder } from "ponder:registry";
-import { transfers, delegations } from "ponder:schema";
+import { transfers, balances, delegations } from "ponder:schema";
+import { and, eq, or } from "drizzle-orm";
 import { getAddress, zeroAddress } from "viem";
+import { confidentialTokenAbi } from "./abis/confidentialToken";
+import { runBackfill } from "./backfill";
 
 function transferId(txHash: string, logIndex: number) {
   return `${txHash}-${logIndex}`;
@@ -23,18 +26,51 @@ function classifyKind(from: string, to: string): "transfer" | "shield" | "unshie
   return "transfer";
 }
 
+// Record/refresh an account's confidential balance handle (cleartext filled by
+// the backfill). The handle changes on every transfer, so re-read and reset state.
+async function upsertBalanceHandle(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  context: { client: any; db: any },
+  token: `0x${string}`,
+  account: `0x${string}`,
+  blockNumber: bigint,
+) {
+  if (account === zeroAddress) return;
+  const handle = await context.client.readContract({
+    address: token,
+    abi: confidentialTokenAbi,
+    functionName: "confidentialBalanceOf",
+    args: [account],
+  });
+  const row = {
+    id: `${token}-${account}`,
+    token,
+    account,
+    balanceHandle: handle,
+    balance: null,
+    decryptionState: "pending_rights" as const,
+    updatedAtBlock: blockNumber,
+    attempts: 0,
+    lastAttemptAt: null,
+  };
+  await context.db.insert(balances).values(row).onConflictDoUpdate(row);
+}
+
 ponder.on("ConfidentialToken:ConfidentialTransfer", async ({ event, context }) => {
-  const { from, to, amount } = event.args;
+  const from = getAddress(event.args.from);
+  const to = getAddress(event.args.to);
+  const token = getAddress(event.log.address);
+
   await context.db
     .insert(transfers)
     .values({
       id: transferId(event.transaction.hash, event.log.logIndex),
-      token: getAddress(event.log.address),
+      token,
       kind: classifyKind(from, to),
-      from: getAddress(from),
-      to: getAddress(to),
-      amountHandle: amount, // ciphertext handle — always recorded
-      amount: null, // cleartext filled by decryption / disclosure
+      from,
+      to,
+      amountHandle: event.args.amount,
+      amount: null,
       decryptionState: "pending_rights",
       decryptedVia: null,
       blockNumber: event.block.number,
@@ -45,55 +81,65 @@ ponder.on("ConfidentialToken:ConfidentialTransfer", async ({ event, context }) =
       lastAttemptAt: null,
     })
     .onConflictDoNothing();
+
+  // Track the confidential balance handle for each party.
+  await upsertBalanceHandle(context, token, from, event.block.number);
+  await upsertBalanceHandle(context, token, to, event.block.number);
 });
 
-// Public cleartext reveal: any transfer carrying this exact handle can be filled
-// in regardless of holder rights.
+// Public cleartext reveal — fills any row carrying this exact handle, no rights needed.
 ponder.on("ConfidentialToken:AmountDisclosed", async ({ event, context }) => {
-  const { encryptedAmount, amount } = event.args;
   await context.db.sql
     .update(transfers)
-    .set({ amount, decryptionState: "decrypted", decryptedVia: "amount_disclosed" })
-    .where(eqHandle(transfers.amountHandle, encryptedAmount));
+    .set({ amount: event.args.amount, decryptionState: "decrypted", decryptedVia: "amount_disclosed" })
+    .where(eq(transfers.amountHandle, event.args.encryptedAmount));
 });
 
 // Unshield step 2 carries the cleartext unwrap amount on-chain.
 ponder.on("ConfidentialToken:UnwrapFinalized", async ({ event, context }) => {
-  const { encryptedAmount, cleartextAmount } = event.args;
   await context.db.sql
     .update(transfers)
-    .set({ amount: cleartextAmount, decryptionState: "decrypted", decryptedVia: "unwrap_finalized" })
-    .where(eqHandle(transfers.amountHandle, encryptedAmount));
+    .set({ amount: event.args.cleartextAmount, decryptionState: "decrypted", decryptedVia: "unwrap_finalized" })
+    .where(eq(transfers.amountHandle, event.args.encryptedAmount));
 });
 
-// ACL rights discovery — only events naming our holder as delegate reach here
-// (filtered in ponder.config.ts).
+// ACL rights discovery — only events naming our holder as delegate reach here.
 ponder.on("Acl:DelegatedForUserDecryption", async ({ event, context }) => {
-  const { delegator, delegate, contractAddress, delegationCounter, newExpirationDate } = event.args;
-  const id = `${getAddress(contractAddress)}-${getAddress(delegator)}`;
+  const delegator = getAddress(event.args.delegator);
+  const delegate = getAddress(event.args.delegate);
+  const contractAddress = getAddress(event.args.contractAddress);
+  const id = `${contractAddress}-${delegator}`;
   const row = {
     id,
-    delegator: getAddress(delegator),
-    delegate: getAddress(delegate),
-    contractAddress: getAddress(contractAddress),
+    delegator,
+    delegate,
+    contractAddress,
     active: true,
-    expiry: newExpirationDate,
-    delegationCounter,
+    expiry: event.args.newExpirationDate,
+    delegationCounter: event.args.delegationCounter,
     observedAtBlock: event.block.number,
   };
   await context.db.insert(delegations).values(row).onConflictDoUpdate(row);
+
+  // Event-driven promotion: this delegator's pending amounts/balances are now
+  // eligible — move them to pending_propagation and clear the backoff so the next
+  // backfill tick retries immediately (decrypt succeeds once the gateway syncs).
+  await context.db.sql
+    .update(transfers)
+    .set({ decryptionState: "pending_propagation", lastAttemptAt: null })
+    .where(and(eq(transfers.decryptionState, "pending_rights"), or(eq(transfers.from, delegator), eq(transfers.to, delegator))));
+  await context.db.sql
+    .update(balances)
+    .set({ decryptionState: "pending_propagation", lastAttemptAt: null })
+    .where(and(eq(balances.decryptionState, "pending_rights"), eq(balances.account, delegator)));
 });
 
 ponder.on("Acl:RevokedDelegationForUserDecryption", async ({ event, context }) => {
-  const { delegator, contractAddress, delegationCounter } = event.args;
-  const id = `${getAddress(contractAddress)}-${getAddress(delegator)}`;
-  await context.db
-    .update(delegations, { id })
-    .set({ active: false, delegationCounter });
+  const id = `${getAddress(event.args.contractAddress)}-${getAddress(event.args.delegator)}`;
+  await context.db.update(delegations, { id }).set({ active: false, delegationCounter: event.args.delegationCounter });
 });
 
-// drizzle eq helper imported lazily to keep the handler file focused.
-import { eq } from "drizzle-orm";
-function eqHandle<T>(column: T, value: `0x${string}`) {
-  return eq(column as never, value);
-}
+// Decryption backfill, decoupled from per-transfer events (docs/INDEXER.md §5).
+ponder.on("Backfill:block", async ({ event, context }) => {
+  await runBackfill(context.db, event.block.timestamp);
+});
