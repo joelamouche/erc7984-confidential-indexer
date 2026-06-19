@@ -1,0 +1,8 @@
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/
+@openzeppelin/confidential-contracts/=lib/openzeppelin-confidential-contracts/contracts/
+@fhevm/solidity/=node_modules/@fhevm/solidity/
+@fhevm/host-contracts/=lib/forge-fhevm/src/fhevm-host/
+encrypted-types/=node_modules/encrypted-types/
+forge-fhevm/=lib/forge-fhevm/src/
+forge-std/=lib/forge-std/src/

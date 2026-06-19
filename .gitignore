@@ -22,6 +22,8 @@ build/
 contracts/out/
 contracts/cache/
 contracts/broadcast/
+contracts/lib/
+contracts/node_modules/
 
 # Editor / OS
 .DS_Store

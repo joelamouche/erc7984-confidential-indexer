@@ -1,0 +1,11 @@
+{
+  "name": "contracts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Foundry project: toy ERC-7984 confidential token (ConfidentialUSD wrapper over ToyUSD).",
+  "license": "MIT",
+  "dependencies": {
+    "@fhevm/solidity": "^0.11.1",
+    "encrypted-types": "^0.0.4"
+  }
+}
