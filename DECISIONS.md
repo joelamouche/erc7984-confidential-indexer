@@ -255,18 +255,50 @@ metrics/observability beyond /health. Plus the ordered "next 4h" list.)_
 
 ## 12. SDK feedback (concrete, design-review-shaped)
 
-_(to be completed after a few hours of real use — seeded candidates from initial
-grounding, to be confirmed/reprioritised against actual integration pain:)_
+Three findings from actually wiring decryption into a backend, in priority order.
 
-- **`NoCiphertextError` (HTTP 400) conflates two states.** It means both "you lack
-  rights, retry after a grant" and "this handle genuinely has no ciphertext." An
-  indexer's retry policy needs to tell these apart. _(change / scenario / priority
-  to be argued.)_
-- **`DelegationNotPropagatedError` is a heuristic over a bare HTTP 500.** A real
-  gateway error masquerades as "just wait 30s." _(change / scenario / priority.)_
-- **Sub-path import surface** (`/node`, `/chains`, `/ethers`, `/viem`) +
-  self-registering `node()` transport is easy to wire wrong with no clear error.
-  _(change / scenario / priority.)_
+**1 — The `node()` transport can't run under a bundler's SSR runtime (highest).**
+The worker bootstrap uses `import.meta.resolve`, which Vite/esbuild SSR replaces
+with an undefined `__vite_ssr_import_meta__.resolve`. The decrypt then throws
+`__vite_ssr_import_meta__.resolve is not a function` — opaque, and it cost the most
+time to diagnose (the same call works in plain Node, so it looks like an
+environment gremlin).
+- **(a) Change:** don't depend on `import.meta.resolve` to locate the worker;
+  resolve via a packaged worker entry / `new URL('./worker.js', import.meta.url)`
+  with a CJS fallback, or expose a `workerPath` option. At minimum, detect the
+  missing resolver and throw a *named* error that says "run me outside SSR."
+- **(b) Unblocks:** decryption inside **Ponder**, **Next.js** route handlers,
+  **Remix loaders** — i.e. exactly the backends a wallet partner already runs. I
+  had to shell out to a plain-Node subprocess to work around it.
+- **(c) Priority:** #1 — a hard blocker for the most common integration surface.
+
+**2 — RPC rate-limit failures masquerade as `DECRYPTION_FAILED`.** When the RPC
+429s during the SDK's internal `eth_call` (the ACL delegation check), the error
+surfaces as `DECRYPTION_FAILED` wrapping an ethers `BAD_DATA / missing response`.
+Nothing says "your RPC throttled me," so it reads as "rights/decryption are
+broken."
+- **(a) Change:** detect upstream 429/`-32005` and throw a typed
+  `RpcRateLimitedError` (carrying the provider status), distinct from a real
+  decryption failure.
+- **(b) Unblocks:** every partner on a free-tier RPC (we burned an hour here before
+  splitting the RPC). Also worth documenting that decryption is *RPC-heavy* — it
+  makes batched on-chain calls, which is surprising for something that "talks to
+  the gateway."
+- **(c) Priority:** #2 — not a hard blocker, but a guaranteed time-sink with a
+  misleading error.
+
+**3 — Two names for the same operation, and the legacy shadow.** `sdk.decryption`
+exposes both `userDecrypt`/`delegatedUserDecrypt` *and*
+`decryptValues`/`delegatedDecryptValues` (subtly different signatures), and the
+package wraps the legacy `@zama-fhe/relayer-sdk` whose `createInstance` /
+`userDecrypt` shape is what every doc and LLM still shows.
+- **(a) Change:** pick one decrypt name and deprecate the other; ship a short
+  "migrating from relayer-sdk" page mapping old → new symbols.
+- **(b) Unblocks:** faster onboarding — I spent real time disambiguating which
+  method was the intended entrypoint (resolved by reading the source, see
+  `docs/SDK-NOTES.md`).
+- **(c) Priority:** #3 — a naming/doc papercut, not a blocker, but it taxes every
+  new integrator.
 
 ## 13. AI assistance
 

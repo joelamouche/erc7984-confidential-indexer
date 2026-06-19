@@ -51,10 +51,28 @@ reference (the brief warns LLM training data predates this package).
 git clone https://github.com/joelamouche/erc7984-confidential-indexer.git
 cd erc7984-confidential-indexer
 npm install
-cp .env.example .env        # set SEPOLIA_RPC_URL; MNEMONIC defaults to a test phrase; TOKEN_ADDRESS filled after deploy
+cp .env.example .env        # set SEPOLIA_RPC_URL (indexing); MNEMONIC defaults to a test phrase
+( cd contracts && ./setup.sh )   # one-time: build the toy contracts (only needed to (re)deploy)
 ```
 
-### Run the indexer + API
+### End-to-end demo (fresh deploy → cleartext over the API)
+
+The full path the brief asks for, verified on Sepolia:
+
+```bash
+npm run accounts     # print the role addresses; fund the FUNDER (index 0) from a Sepolia faucet
+npm run fund         # funder fans gas out to deployer + indexer holder + test users
+npm run deploy       # deploy ToyUSD + ConfidentialUSD; writes TOKEN/WRAPPER/START_BLOCK into .env
+npm run seed         # users mint + wrap (shield) -> ConfidentialTransfer events
+npm run dev          # start indexer + API: shields show up as kind=shield, decryptionState=pending_rights
+
+# in another shell — a user grants the indexer decrypt rights, then it backfills cleartext:
+npm run delegate     # user0 delegates to the holder (ACL event). After ~1-2 min gateway sync,
+                     # the backfill decrypts user0's amounts -> decryptionState=decrypted, amount=cleartext.
+                     # user1/user2 never delegate -> stay pending_rights (indexed, not dropped).
+```
+
+### Run the indexer + API on their own
 
 ```bash
 npm run dev        # starts Ponder: indexes from START_BLOCK and serves the read API on PORT
@@ -81,9 +99,15 @@ curl -X POST localhost:42069/v1/tokens/$TOKEN_ADDRESS/delegations/quote
 ### Tests
 
 ```bash
-npm test               # happy path: event in -> correct cleartext out of the API
-npm run test:contracts # forge-fhevm contract tests
+npm test               # unit + integration (happy path: event in -> cleartext out of the API)
+npm run test:contracts # forge-fhevm contract tests (run from contracts/ after ./setup.sh)
 ```
+
+The unit test (error→state mapping) always runs. The two integration tests (a
+delegated user's amount comes out as cleartext; a non-delegated user's amount is
+surfaced as `pending_rights`, not dropped) hit the live API and **skip** unless the
+demo above is running — so a fresh `npm test` stays green, and once the demo is up
+they prove the end-to-end path.
 
 ## Repository layout
 

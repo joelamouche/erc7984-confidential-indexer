@@ -126,6 +126,18 @@ Handles whose cleartext arrives **on-chain** skip the gateway entirely:
 `AmountDisclosed` and `UnwrapFinalized.cleartextAmount` are handled inline and go
 straight to `decrypted` — a free, authoritative fast path.
 
+**Out-of-process decryption (a constraint that became an architecture).** The
+Zama SDK can't actually be called from inside a Ponder handler: its `node()`
+transport bootstraps worker threads via `import.meta.resolve`, which Ponder's
+**Vite SSR** runtime doesn't provide (`__vite_ssr_import_meta__.resolve is not a
+function`). The isolation test (plain Node) decrypts fine; the same call inside a
+handler throws. So the backfill tick spawns a short-lived **plain-Node helper**
+(`scripts/decrypt-handles.ts`) — pipes the handles in, gets cleartext out — and
+writes the result to the DB. This is the same decoupling §6 describes for scale,
+forced earlier by a runtime constraint rather than by load. (At scale this becomes
+a long-lived worker fleet against Postgres; the spawn-per-tick here is a demo
+simplification, and the SDK-feedback note in DECISIONS flags the Vite footgun.)
+
 **Determinism caveat (a real tradeoff, logged in DECISIONS):** Ponder handlers are
 meant to be deterministic so reorg-replays and caching are sound. A decrypt call
 isn't deterministic. We accept this because the write is **idempotent** —
