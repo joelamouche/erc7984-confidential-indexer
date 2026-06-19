@@ -89,7 +89,52 @@ const { items } = await sdk.decryption.delegatedBatchDecryptValues({
 - **Propagation window (critical for the backfill loop):** the on-chain grant is
   immediate, but the gateway must sync cross-chain — **~1–2 min on Sepolia**.
   Decrypting in that window throws **`DelegationNotPropagatedError`** (heuristically
-  mapped from an HTTP 500). The official example retries 5× at 30s.
+  mapped from an HTTP 500). The official example retries 5× at 30s. **The on-chain
+  delegation _event_ is emitted immediately at grant time** — only the
+  _decryption_ is delayed. So "rights observed" and "rights usable" are two
+  distinct moments; the state machine models both.
+
+## ACL on-chain facts (verified, drives rights discovery + facilitation)
+
+Source: `zama-ai/fhevm` `host-contracts/contracts/ACL.sol` + `ACLEvents.sol`;
+SDK `packages/sdk/src/contracts/acl.ts` + `abi/acl.abi.ts` (prerelease).
+
+- **ACL contract on Sepolia:** `0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D`.
+- **Delegation grant function (the user signs this):**
+  ```solidity
+  // single contractAddress (NOT an address[]); expiry in unix seconds, must be > now.
+  // contractAddress may be the wildcard 0xFFf...FfF meaning "all contracts".
+  function delegateForUserDecryption(address delegate, address contractAddress, uint64 expirationDate);
+  function revokeDelegationForUserDecryption(address delegate, address contractAddress);
+  ```
+- **Events the indexer subscribes to** (`delegate`/`account` are indexed → topic-filter on the holder):
+  ```solidity
+  event DelegatedForUserDecryption(address indexed delegator, address indexed delegate,
+      address contractAddress, uint64 delegationCounter, uint64 oldExpirationDate, uint64 newExpirationDate);
+  event RevokedDelegationForUserDecryption(address indexed delegator, address indexed delegate,
+      address contractAddress, uint64 delegationCounter, uint64 oldExpirationDate);
+  event Allowed(address indexed caller, address indexed account, bytes32 handle); // per-handle persistent grant
+  ```
+  `contractAddress` is in data, not indexed. `delegationCounter` orders/dedupes
+  grants per `(delegator, delegate, contractAddress)`. `allowTransient` emits
+  **nothing** (transient storage) — only persistent `allow` is observable.
+- **No on-chain enumeration** of "delegations where I'm the delegate" — mappings
+  aren't iterable. Reconstruct the delegator set from historical events
+  (`eth_getLogs` from the ACL deploy block, filtered `delegate == holder`) +
+  validate each tuple with `sdk.delegations.isActive`/`getExpiry`.
+
+### Build delegation calldata WITHOUT signing (for the facilitation endpoint)
+
+`sdk.delegations.delegateDecryption(...)` signs+sends (needs the delegator's
+signer) — wrong for a server that must not hold user keys. Use the build-only
+helper instead and hand the result to the user's wallet:
+
+```ts
+import { delegateForUserDecryptionContract } from "@zama-fhe/sdk"; // contracts/acl.ts
+const call = delegateForUserDecryptionContract(aclAddress, holderAddress, tokenAddress, expiry);
+// -> { address, abi, functionName: "delegateForUserDecryption", args: [holder, token, expiry] }
+// API returns { to: call.address, data: encodeFunctionData(call), chainId }; the wallet signs+sends.
+```
 
 ## Public decryption (signer-independent reveal)
 

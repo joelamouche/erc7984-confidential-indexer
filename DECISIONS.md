@@ -104,14 +104,52 @@ balance-as-summed-deltas. I chose decrypting the on-chain
 for shield/unshield) and keep delta-reconstruction only as a logged consistency
 check. Defended in ARCHITECTURE.
 
-## 5. Storage: Ponder's embedded pglite
+## 5. Rights discovery is event-driven (index the ACL contract), + delegation facilitation
+
+**Decision:** the indexer treats the canonical fhEVM **ACL contract** as a second
+indexed source, topic-filtered to its own holder
+(`DelegatedForUserDecryption` / `RevokedDelegationForUserDecryption` where
+`delegate == holder`, plus optionally `Allowed` where `account == holder`). A
+`delegations` table is the holder's live picture of what it may decrypt.
+
+**Why this over pure trial-and-error:** catching `NoCiphertextError` per handle
+and parking as `pending_rights` works, but it's reactive and noisy — every
+not-yet-permitted amount costs a failed gateway round-trip. Indexing ACL events
+means the moment a partner user delegates, the indexer *knows*, promotes that
+user's `pending_rights` amounts, and decrypts them after the propagation window.
+The error path stays as a safety net for anything the events didn't predict.
+
+**A timing subtlety I'm encoding (verified on-chain):** the
+`DelegatedForUserDecryption` event is emitted **immediately** at grant, but
+delegated decryption only works **~1–2 min later** (the gateway syncs ACL state
+cross-chain on Arbitrum). So "rights observed" ≠ "rights usable" — they're
+separate states (`pending_rights` → `pending_propagation` → `decrypted`).
+
+**Delegation facilitation — and the security boundary I won't cross.** Partners
+need a frictionless way for their users to grant rights. The SDK's
+`sdk.delegations.delegateDecryption(...)` signs+sends from the configured signer,
+which would mean the indexer holding user keys — a non-starter. Instead the API
+exposes `POST .../delegations/quote` that returns an **unsigned** tx
+(`{ to: aclAddress, data, chainId }`) built with the SDK's calldata-only helper
+`delegateForUserDecryptionContract(...)`; the user's wallet signs and sends. The
+indexer constructs intent, the user authorizes. A `GET .../delegations/:address`
+status route (backed by `sdk.delegations.isActive`/`getExpiry`) closes the loop.
+
+**Correction logged:** the first research pass reported the ACL grant as taking
+an `address[] contractAddresses`. The on-chain function is
+`delegateForUserDecryption(address delegate, address contractAddress, uint64 expirationDate)`
+— a single contract (or the wildcard `0xFF…FfF` = all contracts). Verified against
+`host-contracts/contracts/ACL.sol`. Noted here because getting this wrong would
+have produced calldata that reverts.
+
+## 6. Storage: Ponder's embedded pglite
 
 **Decision:** use Ponder's built-in store (pglite, embedded Postgres). The brief
 says storage choice is explicitly not graded ("not testing your ops setup"), so I
 optimise for zero-setup-on-fresh-clone over production-shaped infra. Postgres is a
 one-env-var swap if needed.
 
-## 6. Where I'd push back on the brief
+## 7. Where I'd push back on the brief
 
 - "Current cleartext balance **for an address**" assumes the indexer can decrypt
   arbitrary addresses. It structurally can't — ACL rights are per-handle and only
@@ -127,7 +165,7 @@ one-env-var swap if needed.
 
 ---
 
-## 7. Reflection — least-confident component under partner load
+## 8. Reflection — least-confident component under partner load
 
 _(to be completed after implementation — candidate as of design: the
 decrypt-on-index path inside the Ponder event handler. Decryption is a
@@ -136,13 +174,13 @@ under a burst of transfers this serialises indexing behind network latency and
 rate limits. Hypothesis for what breaks first and how I'd prove it to be filled
 in with the real handler + a load probe.)_
 
-## 8. Reflection — what I cut, and the next four hours
+## 9. Reflection — what I cut, and the next four hours
 
 _(to be completed — running list of cuts as they happen: e.g. per-user identity
 management, websocket/subscription API, auth on the read API, multi-token support,
 metrics/observability beyond /health. Plus the ordered "next 4h" list.)_
 
-## 9. SDK feedback (concrete, design-review-shaped)
+## 10. SDK feedback (concrete, design-review-shaped)
 
 _(to be completed after a few hours of real use — seeded candidates from initial
 grounding, to be confirmed/reprioritised against actual integration pain:)_
@@ -157,7 +195,7 @@ grounding, to be confirmed/reprioritised against actual integration pain:)_
   self-registering `node()` transport is easy to wire wrong with no clear error.
   _(change / scenario / priority.)_
 
-## 10. AI assistance
+## 11. AI assistance
 
 I used **Claude Code** (this submission's authoring environment) throughout, as a
 daily-driver agentic tool. Process and the specific subtly-wrong thing it produced

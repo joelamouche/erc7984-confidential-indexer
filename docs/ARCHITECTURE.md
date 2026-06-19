@@ -20,13 +20,16 @@ delegation). Ponder's built-in **Hono** server exposes the cleartext read API.
 ```
 Sepolia ──logs──> Ponder indexer ──┬─> transfers table (handle + state + cleartext?)
   ERC-7984 token                   ├─> balances cache (handle + cleartext?)
-  ERC-20 wrapper                   └─> decrypt jobs queue
-                                          │
-                              @zama-fhe/sdk (holder identity)
-                                          │
-                              backfill worker  ──(rights granted later)──┐
+  ERC-20 wrapper                   ├─> decrypt jobs queue
+  ACL contract  ─(delegate==holder)┘                                     │
+   (rights events)         └────────────> delegations table ──promotes──►│
                                           │                              │
-                                   Hono read API  <── DB ────────────────┘
+                              @zama-fhe/sdk (holder identity)            │
+                                          │                              │
+                              backfill worker  ──(rights granted later)──┘
+                                          │
+                                   Hono read API  <── DB
+                                   (balances · history · health · delegation quote)
 ```
 
 ## Events we index (verified against OZ `openzeppelin-confidential-contracts`)
@@ -54,6 +57,28 @@ Notes that shape the design:
 - **Unshield (`unwrap`)** is two-phase and async; `UnwrapFinalized.cleartextAmount`
   gives us plaintext without any decryption round-trip — a cheap, authoritative
   cross-check on our SDK-decrypted values.
+
+### Rights-discovery events (the ACL contract — second indexed source)
+
+The indexer also watches the **fhEVM ACL contract**
+(`0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D` on Sepolia), topic-filtered to its
+own holder, so it learns what it may decrypt **event-driven** rather than by
+trial-and-error:
+
+| Event | What we extract |
+| --- | --- |
+| `DelegatedForUserDecryption(address indexed delegator, address indexed delegate, address contractAddress, uint64 counter, uint64 oldExp, uint64 newExp)` | a partner address granted our holder decrypt rights → add/refresh `delegations` row; mark that delegator's `pending_rights` amounts eligible |
+| `RevokedDelegationForUserDecryption(...)` | rights revoked → deactivate the `delegations` row |
+| `Allowed(address indexed caller, address indexed account, bytes32 handle)` | (optional) a specific handle persistently granted to our holder |
+
+`delegate`/`account` are indexed, so we subscribe with `delegate == holder`.
+`contractAddress` is in data (can be the wildcard `0xFF…FfF` = all contracts).
+`delegationCounter` orders grants. `allowTransient` emits nothing, so transient
+rights are intentionally invisible — we only act on persistent grants. The ACL
+exposes no enumeration, so on cold start we backfill ACL logs from its deploy
+block and validate each tuple with `sdk.delegations.isActive`/`getExpiry`. The
+SDK-error path (`NoCiphertextError → pending_rights`) remains a safety net for
+anything the event stream didn't predict.
 
 ## Decryption rights model (the crux)
 
@@ -92,10 +117,14 @@ Every amount handle (transfer or unwrap) carries an explicit state. This is the
                         (RelayerRequestFailed / unknown; backoff retry)
 ```
 
-- `pending_rights` → eligible for **backfill** when a delegation shows up. The
-  backfill worker periodically re-checks `sdk.delegations.isActive` for known
-  delegators and drains matching rows.
-- `pending_propagation` → short retry loop (gateway sync ~1–2 min).
+- `pending_rights` → an amount whose party (`from`/`to`) hasn't delegated to the
+  holder. **Promoted event-driven:** when a `DelegatedForUserDecryption` for that
+  party is indexed on the ACL contract, its `pending_rights` rows move to
+  `pending_propagation`. (A periodic `sdk.delegations.isActive` sweep is the
+  fallback for anything missed.)
+- `pending_propagation` → rights observed on-chain but the gateway hasn't synced
+  yet (the event is immediate, decryption lags ~1–2 min). Short retry loop;
+  `DelegationNotPropagatedError` keeps it here rather than failing.
 - `failed` → exponential backoff, capped retries, then surfaced as `failed` (not
   hidden) so the partner can see the indexer couldn't decrypt.
 - Cleartext from `AmountDisclosed`/`UnwrapFinalized` short-circuits straight to
@@ -138,8 +167,9 @@ balances
   decryptionState  enum (as above)
   updatedAtBlock
 
-delegations            -- known grants the holder can use
-  id (token-delegator) , delegator, active, expiry, lastCheckedAt
+delegations            -- rights the holder can use, sourced from ACL events
+  id (contract-delegator), delegator, contractAddress (or wildcard),
+  active, expiry, delegationCounter, observedAtBlock, lastCheckedAt
 
 indexer_status         -- 1 row, for /health: chainHead, lastIndexedBlock, lag, decryptBacklog
 ```
@@ -150,6 +180,8 @@ indexer_status         -- 1 row, for /health: chainHead, lastIndexedBlock, lag, 
 | --- | --- |
 | `GET /v1/tokens/:token/balances/:address` | current cleartext balance + `decryptionState`; `null` cleartext with a reason when no rights |
 | `GET /v1/tokens/:token/addresses/:address/transfers?cursor=&limit=` | paginated transfer history, cleartext amounts where available, each row carrying its `decryptionState` |
+| `GET /v1/tokens/:token/delegations/:address` | whether `address` has delegated decrypt rights to the indexer holder (`active`, `expiry`) — so a partner can check status |
+| `POST /v1/tokens/:token/delegations/quote` | returns an **unsigned** delegation tx `{ to: aclAddress, data, chainId }` for `address` to grant the holder rights. The indexer builds calldata (`delegateForUserDecryptionContract`); the user's wallet signs+sends. The indexer never holds a user key. |
 | `GET /health` | `{ status, chainHead, lastIndexedBlock, blocksBehind, secondsBehind, decryptBacklog: { pendingRights, pendingPropagation, failed } }` |
 
 Design choices to defend in DECISIONS: cursor pagination (stable under new
@@ -176,6 +208,9 @@ string for undecryptable amounts.
   delegation actually exercise the rights model that is the heart of the brief.
 - Toy ERC-7984 token + wrapper deployed with **EOA test keys** (`.env.example`
   only). Foundry/forge-fhevm for local contract tests and for the deploy script.
+- Two indexed contracts: the token (+wrapper) for activity, and the canonical
+  **ACL contract** (`0xf0Ffdc93b7E186bC2f8CB3dAA75D86d1930A433D`) filtered to the
+  holder for rights discovery. The ACL address is a constant, not deployed by us.
 - Local fhEVM was considered for speed but rejected for the primary path because
   its mocked decryption weakens exactly the signal being graded. Rationale in
   DECISIONS.
