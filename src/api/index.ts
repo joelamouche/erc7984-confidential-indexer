@@ -231,42 +231,47 @@ app.get("/v1/health", async (c) => {
     .where(and(eq(delegations.active, true), gt(delegations.expiry, nowSec)));
   const delegators = dels.map((d) => d.delegator);
 
-  const NOT_DECRYPTED: ("pending_rights" | "pending_propagation" | "failed")[] = [
-    "pending_rights",
-    "pending_propagation",
-    "failed",
-  ];
-  let pending = 0;
+  // Split the entitled-but-undecrypted backlog into two buckets:
+  //   inFlight = still being worked (pending_rights / pending_propagation)
+  //   failed   = exhausted the retry grace (escalateState) — a genuine problem.
+  // Decryption health keys on `failed`, NOT on block-age: a legitimate history
+  // backfill (a user delegating for old transfers) transiently has very old block
+  // ages while draining in seconds, so age would false-positive. `failed` only
+  // appears after MAX_PROPAGATION_ATTEMPTS of real failure, so it's the honest
+  // "decryption is stuck" signal. `oldestAgeSeconds` stays as consumer-facing
+  // staleness info, not a health trigger.
+  const IN_FLIGHT: ("pending_rights" | "pending_propagation")[] = ["pending_rights", "pending_propagation"];
+  let inFlight = 0;
+  let failed = 0;
   let oldestBlock: number | null = null;
   if (delegators.length > 0) {
-    // Pending transfers where a party (from/to) is an active delegator.
-    const [tAgg] = await db
+    const entitledTransfer = or(inArray(transfers.from, delegators), inArray(transfers.to, delegators));
+    const entitledBalance = inArray(balances.account, delegators);
+
+    const [tFlight] = await db
       .select({ n: count(), oldest: min(transfers.blockNumber) })
       .from(transfers)
-      .where(
-        and(
-          isNull(transfers.amount),
-          inArray(transfers.decryptionState, NOT_DECRYPTED),
-          or(inArray(transfers.from, delegators), inArray(transfers.to, delegators)),
-        ),
-      );
-    // Pending balances for an active delegator.
-    const [bAgg] = await db
+      .where(and(isNull(transfers.amount), inArray(transfers.decryptionState, IN_FLIGHT), entitledTransfer));
+    const [bFlight] = await db
       .select({ n: count(), oldest: min(balances.updatedAtBlock) })
       .from(balances)
-      .where(
-        and(
-          isNull(balances.balance),
-          inArray(balances.decryptionState, NOT_DECRYPTED),
-          inArray(balances.account, delegators),
-        ),
-      );
-    pending = Number(tAgg?.n ?? 0) + Number(bAgg?.n ?? 0);
-    const oldest = [tAgg?.oldest, bAgg?.oldest].filter((x): x is bigint => x != null).map(Number);
+      .where(and(isNull(balances.balance), inArray(balances.decryptionState, IN_FLIGHT), entitledBalance));
+    const [tFailed] = await db
+      .select({ n: count() })
+      .from(transfers)
+      .where(and(isNull(transfers.amount), eq(transfers.decryptionState, "failed"), entitledTransfer));
+    const [bFailed] = await db
+      .select({ n: count() })
+      .from(balances)
+      .where(and(isNull(balances.balance), eq(balances.decryptionState, "failed"), entitledBalance));
+
+    inFlight = Number(tFlight?.n ?? 0) + Number(bFlight?.n ?? 0);
+    failed = Number(tFailed?.n ?? 0) + Number(bFailed?.n ?? 0);
+    const oldest = [tFlight?.oldest, bFlight?.oldest].filter((x): x is bigint => x != null).map(Number);
     oldestBlock = oldest.length ? Math.min(...oldest) : null;
   }
 
-  // Age of the backlog: wall-clock since the oldest still-pending entitled row.
+  // Age of the oldest in-flight entitled row (consumer-facing staleness).
   let oldestAgeSeconds: number | null = null;
   if (oldestBlock != null) {
     try {
@@ -277,14 +282,24 @@ app.get("/v1/health", async (c) => {
     }
   }
 
-  const healthy = secondsBehind === null || secondsBehind <= env.MAX_LAG_SECONDS;
+  // Two independent health axes; overall status is the worse of the two.
+  const indexingHealthy = secondsBehind === null || secondsBehind <= env.MAX_LAG_SECONDS;
+  const decryptionHealthy = failed === 0;
+  const status = indexingHealthy && decryptionHealthy ? "ok" : "degraded";
   return c.json(
     {
-      status: healthy ? "ok" : "degraded",
-      indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds: env.MAX_LAG_SECONDS },
-      decryptable: { pending, oldestBlock, oldestAgeSeconds },
+      status,
+      indexing: {
+        healthy: indexingHealthy,
+        indexedBlock,
+        chainHead,
+        blocksBehind,
+        secondsBehind,
+        maxLagSeconds: env.MAX_LAG_SECONDS,
+      },
+      decryptable: { healthy: decryptionHealthy, inFlight, failed, oldestBlock, oldestAgeSeconds },
     },
-    healthy ? 200 : 503,
+    status === "ok" ? 200 : 503,
   );
 });
 

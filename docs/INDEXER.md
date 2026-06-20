@@ -217,9 +217,10 @@ distinctly so a partner isn't misled by a single lag figure:
 
 Mixing these into one "behind" number would be wrong: a 2M-handle backfill for one
 whale shouldn't make the API look "5 hours behind" for everyone else who is live.
-The `decryptable` metric already in `/v1/health` (entitled-but-pending **size +
-age**) generalises straight into this split — one `decryptable` per queue, with
-the backfill one reported per address.
+The `decryptable` metric already in `/v1/health` (entitled rows split into
+`inFlight` / `failed`, with the oldest in-flight age) generalises straight into
+this split — one `decryptable` per queue, with the backfill one reported per
+address.
 
 **Mechanics.** Workers are stateless plain-Node processes (the SDK already has to
 run outside Ponder, §5, so an out-of-process worker is its *natural* home — no

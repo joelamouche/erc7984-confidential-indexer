@@ -172,7 +172,7 @@ delegations            -- rights the holder can use, sourced from ACL events
   active, expiry, delegationCounter, observedAtBlock, lastCheckedAt
 
 -- /health is computed live (no table): indexing lag (Ponder /status + chain head)
---   + decryptable backlog (entitled-but-pending size + age) from transfers/balances
+--   + decryptable backlog (entitled inFlight/failed split + oldest age) from transfers/balances
 ```
 
 ## Read API (shapes are our design — DX matters)
@@ -183,26 +183,31 @@ delegations            -- rights the holder can use, sourced from ACL events
 | `GET /v1/tokens/:token/addresses/:address/transfers?cursor=&limit=` | paginated transfer history, cleartext amounts where available, each row carrying its `decryptionState` |
 | `GET /v1/tokens/:token/delegations/:address` | whether `address` has delegated decrypt rights to the indexer holder (`active`, `expiry`) — so a partner can check status |
 | `POST /v1/tokens/:token/delegations/quote` | returns an **unsigned** delegation tx `{ to: aclAddress, data, chainId }` for `address` to grant the holder rights. The indexer builds calldata (`delegateForUserDecryptionContract`); the user's wallet signs+sends. The indexer never holds a user key. |
-| `GET /v1/health` | `{ status, indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptable: { pending, oldestBlock, oldestAgeSeconds } }`; `503` when degraded |
+| `GET /v1/health` | `{ status, indexing: { healthy, indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptable: { healthy, inFlight, failed, oldestBlock, oldestAgeSeconds } }`; `503` when degraded |
 
 ### How far behind is the indexer? (the brief's "how far behind")
 
-"Behind" has **two independent axes**, and `/v1/health` reports both — collapsing
-them into one number would mislead:
+"Behind" has **two independent axes**, each with its own `healthy` flag, and the
+top-level `status` is the **worse of the two** (`ok` only if both healthy; `503`
+otherwise). Collapsing them into one number would mislead.
 
 - **Indexing lag** (`indexing`): how far the *event* stream trails the chain.
   `indexedBlock` vs `chainHead` → `blocksBehind`; and `secondsBehind` = wall-clock
-  since the last indexed block's timestamp (from Ponder's own `/status`). `status`
-  is `degraded` (HTTP 503) once `secondsBehind > maxLagSeconds`, so a load balancer
-  can drain a stale replica.
+  since the last indexed block's timestamp (from Ponder's own `/status`).
+  `indexing.healthy` is false once `secondsBehind > maxLagSeconds`, so a load
+  balancer can drain a stale replica.
 - **Decryption backlog** (`decryptable`): the *actionable* work — rows we are
-  **entitled** to decrypt (a party has an active delegation) but **haven't yet**
-  (`pending_rights` / `pending_propagation` / `failed`). This is deliberately
-  **not** the raw state counts: rows with no delegation aren't our work (they'll
-  never decrypt until the user opts in — not a performance signal), and `decrypted`
-  rows are done. We report **size** (`pending`) *and* **age** (`oldestBlock` +
-  `oldestAgeSeconds` = how long the oldest entitled-but-pending row has waited) —
-  a growing or aging backlog is the real "decryption is falling behind" signal.
+  **entitled** to decrypt (a party has an active delegation) but **haven't yet**.
+  This is deliberately **not** the raw state counts: rows with no delegation aren't
+  our work (they'll never decrypt until the user opts in), and `decrypted` rows are
+  done. We split it into `inFlight` (`pending_rights` / `pending_propagation` —
+  being worked) and `failed` (exhausted the retry grace; see `escalateState`).
+  **`decryptable.healthy` keys on `failed === 0`, not on age** — because a
+  legitimate history backfill (a user delegating for week-old transfers)
+  transiently has very old `oldestBlock`s while draining in seconds, so age would
+  false-positive. `failed` only appears after `MAX_PROPAGATION_ATTEMPTS` of *real*
+  failure (~minutes), so it's the honest "decryption is stuck" signal.
+  `oldestAgeSeconds` is kept as consumer-facing staleness, not a health trigger.
 
 **At scale** this is exactly where the two-queue design pays off: `decryptable`
 splits into **live lag** (near-zero target) vs **per-address backfill backlog**

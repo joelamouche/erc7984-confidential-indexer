@@ -76,8 +76,10 @@ curl -s localhost:42069/v1/health | jqp
 Point at the **two axes**: `indexing` (blocksBehind / secondsBehind vs the chain
 head) and `decryptable` (the backlog we're *entitled* to decrypt but haven't —
 `pending` count + `oldestAgeSeconds`, i.e. size **and** age). If you're recording
-the catch-up, re-run this and watch `blocksBehind` fall to 0, `decryptable.pending`
-drain to 0 as the backfill runs, and `status` flip `degraded → ok`.
+the catch-up, re-run this and watch `blocksBehind` fall to 0,
+`decryptable.inFlight` drain to 0 as the backfill runs, and `status` flip
+`degraded → ok` (it's `ok` only when **both** `indexing.healthy` and
+`decryptable.healthy` are true).
 
 ### 2. A delegated user's history — all cleartext
 
@@ -142,7 +144,7 @@ Now check the backlog — it should **jump**, because user1's history just becam
 work we're *entitled* to do:
 
 ```bash
-curl -s localhost:42069/v1/health | jqp     # decryptable.pending > 0, oldestAgeSeconds large
+curl -s localhost:42069/v1/health | jqp     # decryptable.inFlight > 0, oldestAgeSeconds large
 ```
 
 Wait only a few seconds (measured ~4s gateway sync on Sepolia; the flip is gated by
@@ -155,7 +157,7 @@ And the API flips:
 
 ```bash
 curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U1/transfers" | jqp   # user1's history now cleartext
-curl -s localhost:42069/v1/health | jqp                                   # decryptable.pending back to 0
+curl -s localhost:42069/v1/health | jqp                                   # decryptable.inFlight back to 0
 ```
 
 That's the full loop: **opt-in → ACL event → promote → backfill → cleartext**, with
