@@ -94,11 +94,27 @@ ponder.on("ConfidentialToken:AmountDisclosed", async ({ event, context }) => {
     .where(eq(transfers.amountHandle, event.args.encryptedAmount));
 });
 
-// Unshield step 2 carries the cleartext unwrap amount on-chain.
+// Unshield step 1: the unwrap is requested (burn already indexed). Mark the
+// unshield row as awaiting the gateway. On this contract the requestId equals the
+// burn's amount handle, so we correlate by handle.
+ponder.on("ConfidentialToken:UnwrapRequested", async ({ event, context }) => {
+  await context.db.sql
+    .update(transfers)
+    .set({ unwrapStatus: "requested" })
+    .where(eq(transfers.amountHandle, event.args.unwrapRequestId));
+});
+
+// Unshield step 2: the gateway finalized — the cleartext unwrap amount is on-chain
+// (public, no rights needed) and the underlying ERC-20 is released.
 ponder.on("ConfidentialToken:UnwrapFinalized", async ({ event, context }) => {
   await context.db.sql
     .update(transfers)
-    .set({ amount: event.args.cleartextAmount, decryptionState: "decrypted", decryptedVia: "unwrap_finalized" })
+    .set({
+      amount: event.args.cleartextAmount,
+      decryptionState: "decrypted",
+      decryptedVia: "unwrap_finalized",
+      unwrapStatus: "finalized",
+    })
     .where(eq(transfers.amountHandle, event.args.encryptedAmount));
 });
 

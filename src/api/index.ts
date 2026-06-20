@@ -131,6 +131,7 @@ app.get("/v1/tokens/:token/addresses/:address/transfers", async (c) => {
         amountHandle: t.amountHandle,
         decryptionState: t.decryptionState,
         decryptedVia: t.decryptedVia,
+        unwrapStatus: t.unwrapStatus, // unshield rows: requested | finalized (else null)
         blockNumber: t.blockNumber,
         blockTime: t.blockTime,
         txHash: t.txHash,

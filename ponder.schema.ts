@@ -29,6 +29,14 @@ export const decryptedVia = onchainEnum("decrypted_via", [
   "unwrap_finalized", // cleartext came from UnwrapFinalized.cleartextAmount
 ]);
 
+// Unwrap lifecycle for unshield rows — orthogonal to decryptionState. An unshield
+// can be `decrypted` (we know the amount) yet still `requested` (the gateway hasn't
+// finalized the unwrap, so the underlying ERC-20 hasn't been released).
+export const unwrapStatus = onchainEnum("unwrap_status", [
+  "requested", // burned + decryption requested; awaiting the gateway's finalizeUnwrap
+  "finalized", // gateway finalized; underlying ERC-20 released
+]);
+
 /** One row per transfer/mint/burn/shield/unshield event. */
 export const transfers = onchainTable("transfers", (t) => ({
   id: t.text().primaryKey(), // `${txHash}-${logIndex}`
@@ -40,6 +48,7 @@ export const transfers = onchainTable("transfers", (t) => ({
   amount: t.bigint(), // cleartext, when known
   decryptionState: decryptionState().notNull(),
   decryptedVia: decryptedVia(),
+  unwrapStatus: unwrapStatus(), // null except on unshield rows
   blockNumber: t.bigint().notNull(),
   blockTime: t.bigint().notNull(),
   logIndex: t.integer().notNull(),

@@ -31,6 +31,7 @@ interface TransferRow {
   amount: string | null;
   decryptionState: string;
   decryptedVia: string | null;
+  unwrapStatus: string | null;
 }
 
 async function getTransfers(addr: string): Promise<TransferRow[]> {
@@ -68,6 +69,7 @@ interface Scenario {
   queryAddr: string;
   match: (t: TransferRow) => boolean;
   cleartext: string | null; // expected amount; null = must stay pending (not dropped)
+  unwrapStatus?: string; // asserted when set (unshield lifecycle)
 }
 
 const SCENARIOS: Scenario[] = [
@@ -96,15 +98,18 @@ const SCENARIOS: Scenario[] = [
     cleartext: null,
   },
   {
-    name: "unshield by delegated user0 (burn): cleartext via delegation",
+    // amount known via delegation, yet the unwrap is still awaiting the gateway —
+    // decryptionState and unwrapStatus are orthogonal.
+    name: "unshield by delegated user0 (burn): cleartext via delegation, unwrap still requested",
     queryAddr: user0,
     match: (t) => t.kind === "unshield" && addr(t.from) === user0,
     cleartext: "20000000",
+    unwrapStatus: "requested",
   },
 ];
 
 describe.skipIf(!UP)("read API — cleartext-or-pending by delegation, across event kinds", () => {
-  it.each(SCENARIOS)("$name", async ({ queryAddr, match, cleartext }) => {
+  it.each(SCENARIOS)("$name", async ({ queryAddr, match, cleartext, unwrapStatus }) => {
     const row = await awaitRow(queryAddr, match, cleartext != null);
     expect(row, "event must be indexed, never dropped").toBeDefined();
     if (cleartext != null) {
@@ -114,5 +119,6 @@ describe.skipIf(!UP)("read API — cleartext-or-pending by delegation, across ev
       expect(row?.amount).toBeNull();
       expect(["pending_rights", "pending_propagation"]).toContain(row?.decryptionState);
     }
+    if (unwrapStatus) expect(row?.unwrapStatus).toBe(unwrapStatus);
   }, 150_000);
 });
