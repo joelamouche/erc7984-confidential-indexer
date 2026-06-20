@@ -7,7 +7,7 @@
  * indexing loop. `AmountDisclosed`/`UnwrapFinalized` give cleartext from chain with
  * no SDK round-trip. See docs/INDEXER.md §5.
  */
-import { ponder } from "ponder:registry";
+import { ponder, type Context } from "ponder:registry";
 import { transfers, balances, delegations } from "ponder:schema";
 import { and, eq, or } from "drizzle-orm";
 import { getAddress, zeroAddress } from "viem";
@@ -29,8 +29,7 @@ function classifyKind(from: string, to: string): "transfer" | "shield" | "unshie
 // Record/refresh an account's confidential balance handle (cleartext filled by
 // the backfill). The handle changes on every transfer, so re-read and reset state.
 async function upsertBalanceHandle(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  context: { client: any; db: any },
+  context: Pick<Context, "client" | "db">,
   token: `0x${string}`,
   account: `0x${string}`,
   blockNumber: bigint,

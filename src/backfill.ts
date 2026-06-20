@@ -9,9 +9,10 @@
  */
 import { spawn } from "node:child_process";
 import { resolve as pathResolve } from "node:path";
+import type { Context } from "ponder:registry";
 import { transfers, balances, delegations } from "ponder:schema";
 import { and, eq, inArray, isNull, lt, or } from "drizzle-orm";
-import { getAddress, zeroAddress, type Address, type Hex } from "viem";
+import { getAddress, zeroAddress, type Address } from "viem";
 import { env } from "./config";
 import { HOLDER } from "./zama/sdk";
 import type { DecryptState } from "./zama/state";
@@ -47,8 +48,7 @@ const BATCH = 25;
 const BACKOFF_SECONDS = 60n;
 const PENDING: DecryptState[] = ["pending_rights", "pending_propagation", "failed"];
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function runBackfill(db: any, blockTime: bigint): Promise<void> {
+export async function runBackfill(db: Context["db"], blockTime: bigint): Promise<void> {
   const token = getAddress(env.TOKEN_ADDRESS as string);
 
   // Delegators whose grants are currently usable by the holder.
@@ -61,8 +61,7 @@ export async function runBackfill(db: any, blockTime: bigint): Promise<void> {
   await backfillBalances(db, token, blockTime, activeDelegators);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function backfillTransfers(db: any, token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
+async function backfillTransfers(db: Context["db"], token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
   const due = or(isNull(transfers.lastAttemptAt), lt(transfers.lastAttemptAt, blockTime - BACKOFF_SECONDS));
   const rows = await db.sql
     .select()
@@ -70,14 +69,14 @@ async function backfillTransfers(db: any, token: Address, blockTime: bigint, act
     .where(and(eq(transfers.token, token), inArray(transfers.decryptionState, PENDING), isNull(transfers.amount), due))
     .limit(BATCH);
 
-  const items: DecryptItem[] = rows.map((r: { id: string; amountHandle: Hex; from: string; to: string }) => ({
+  const items: DecryptItem[] = rows.map((r) => ({
     id: r.id,
     handle: r.amountHandle,
     parties: [getAddress(r.from), getAddress(r.to)].filter((a) => a !== zeroAddress),
   }));
 
   const update: Update = async (id, patch) => {
-    await db.update(transfers, { id }).set((row: { amount: bigint | null; decryptedVia: string | null; attempts: number }) => ({
+    await db.update(transfers, { id }).set((row) => ({
       amount: patch.amount ?? row.amount,
       decryptionState: patch.state,
       decryptedVia: patch.via ?? row.decryptedVia,
@@ -89,8 +88,7 @@ async function backfillTransfers(db: any, token: Address, blockTime: bigint, act
   await routeAndDecrypt(token, HOLDER, activeDelegators, items, runDecryptSubprocess, update);
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function backfillBalances(db: any, token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
+async function backfillBalances(db: Context["db"], token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
   const due = or(isNull(balances.lastAttemptAt), lt(balances.lastAttemptAt, blockTime - BACKOFF_SECONDS));
   const rows = await db.sql
     .select()
@@ -98,16 +96,12 @@ async function backfillBalances(db: any, token: Address, blockTime: bigint, acti
     .where(and(eq(balances.token, token), inArray(balances.decryptionState, PENDING), isNull(balances.balance), due))
     .limit(BATCH);
 
-  const items: DecryptItem[] = rows
-    .filter((r: { balanceHandle: Hex | null }) => r.balanceHandle != null)
-    .map((r: { id: string; balanceHandle: Hex; account: string }) => ({
-      id: r.id,
-      handle: r.balanceHandle,
-      parties: [getAddress(r.account)],
-    }));
+  const items: DecryptItem[] = rows.flatMap((r) =>
+    r.balanceHandle == null ? [] : [{ id: r.id, handle: r.balanceHandle, parties: [getAddress(r.account)] }],
+  );
 
   const update: Update = async (id, patch) => {
-    await db.update(balances, { id }).set((row: { balance: bigint | null; attempts: number }) => ({
+    await db.update(balances, { id }).set((row) => ({
       balance: patch.amount ?? row.balance,
       decryptionState: patch.state,
       attempts: row.attempts + 1,

@@ -34,10 +34,13 @@ export interface DecryptResult {
 
 export type DecryptRunner = (job: DecryptJob) => Promise<DecryptResult>;
 
+/** How a row was decrypted — the subset of `decryptedVia` the backfill can set. */
+export type DecryptedVia = "holder" | "delegation";
+
 export interface Patch {
   amount?: bigint;
   state: DecryptState;
-  via: string | null;
+  via: DecryptedVia | null;
 }
 export type Update = (id: string, patch: Patch) => Promise<void>;
 
@@ -80,7 +83,7 @@ export async function routeAndDecrypt(
   // No rights: record the attempt, stay pending_rights — do NOT call the gateway.
   for (const it of noRights) await update(it.id, { state: "pending_rights", via: null });
 
-  const groups: Array<{ delegator: Address | null; via: string; items: DecryptItem[] }> = [];
+  const groups: Array<{ delegator: Address | null; via: DecryptedVia; items: DecryptItem[] }> = [];
   if (holderGroup.length) groups.push({ delegator: null, via: "holder", items: holderGroup });
   for (const [delegator, group] of delegatedGroups) groups.push({ delegator, via: "delegation", items: group });
   if (groups.length === 0) return;
