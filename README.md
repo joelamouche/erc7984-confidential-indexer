@@ -134,7 +134,7 @@ src/api/          Hono read API (balances, history, delegations, health)
 src/abis/         vendored event ABIs (topic-exact) so the indexer runs without compiling Solidity
 src/config.ts     env parsing + HD account derivation
 scripts/          accounts, fund, deploy, seed
-docs/             CHALLENGE.md (brief), ARCHITECTURE.md, INDEXER.md, SDK-NOTES.md, AI-WORKFLOW.md
+docs/             CHALLENGE.md (brief), ARCHITECTURE.md, INDEXER.md, SDK-NOTES.md, AI-WORKFLOW.md, DEMO.md
 DECISIONS.md      trade-offs, reflection, SDK feedback, AI-assistance notes
 ```
 
