@@ -172,14 +172,69 @@ design is entirely about draining that backlog efficiently:
 - **Idempotent + keyed by handle** so retries and reorgs are safe and a crashed
   tick simply re-runs.
 
-**The path past one process (deferred, documented):** swap PGlite → Postgres (one
-env var) and run the backfill as **N separate worker processes** pulling from a
-job table / queue (claim-with-`SKIP LOCKED`), writing cleartext into a
-worker-owned `decryptions(handle → cleartext)` table that the API joins. That
-removes the single-process ceiling and lets decryption scale horizontally against
-the gateway's rate limit. We don't build this — it's the "next four hours" answer,
-not the 3–4 hour submission — but the in-process design above is shaped so the move
-is mechanical (the decrypt logic and the handle-keyed idempotency don't change).
+### Scaling out: two queues + worker pools (RabbitMQ)
+
+The single-process backfill is fine for the demo, but the real shape is a
+**message broker (RabbitMQ) feeding worker pools**, with **two separate queues**
+because there are two genuinely different decryption workloads with different SLAs:
+
+```
+                        ┌──────────────────────────── live.decrypt ──────────┐
+Ponder indexer ─emits─▶ producer ─┤  (new at-head events the holder can decrypt) │
+  (events + ACL)        │         └─────────────────────────────────────────────┘
+                        │                                  │  high priority, autoscale
+                        │                          live worker pool ──┐
+                        │                                              ▼
+                        │         ┌──────── backfill.decrypt ───────┐  Postgres
+                        └─emits──▶┤ (a newly-delegated address's     │  (decryptions,
+                          (on      │  whole history — bulk job)      │   handle→cleartext)
+                          Delegated)└─────────────────────────────────┘  ▲
+                                              │ low priority, CAPPED pool │
+                                       backfill worker pool ─────────────┘
+```
+
+1. **`live.decrypt` — keep current data fresh.** New events at chain head that the
+   holder is already entitled to decrypt. Target: near-zero lag. The live worker
+   pool **autoscales** to keep this queue almost empty, because this is what a
+   partner watching balances in real time feels. High priority / high prefetch.
+
+2. **`backfill.decrypt` — drain a newly-delegated address's history.** When a
+   `DelegatedForUserDecryption` lands, we enqueue a **bulk** job to decrypt that
+   address's entire backlog of `pending_rights` handles. This can be **huge** (a
+   whale with thousands of historical transfers), so it runs on a **capped** worker
+   pool at **low priority** and a delay is **acceptable in UX** — the user just
+   opted in, so "decrypting your history… 73%" is a fine experience. Critically,
+   backfill must **never starve live**: separate pools (or a strict priority +
+   bounded backfill prefetch) guarantee a delegation storm can't stall realtime.
+
+**Why this matters for the read API ("how far behind am I?").** The two queues map
+to **two different freshness numbers**, and `/v1/health` should report both
+distinctly so a partner isn't misled by a single lag figure:
+
+- **live lag** (`secondsBehind` ≈ 0 target) — am I current with the chain head?
+- **backfill backlog** — how much delegated-history is still being decrypted,
+  ideally **per address** ("user X: 73% decrypted") plus a global pending count.
+
+Mixing these into one "behind" number would be wrong: a 2M-handle backfill for one
+whale shouldn't make the API look "5 hours behind" for everyone else who is live.
+The `decryptBacklog` shape already in `/v1/health` (`pendingRights` /
+`pendingPropagation` / `failed`) generalises straight into this split.
+
+**Mechanics.** Workers are stateless plain-Node processes (the SDK already has to
+run outside Ponder, §5, so an out-of-process worker is its *natural* home — no
+new constraint). Each worker: pull a job → batch-decrypt via the SDK → upsert
+cleartext into a Postgres `decryptions(handle → cleartext)` table the API joins →
+ack. **Idempotent and keyed by the immutable handle**, so redeliveries and reorgs
+are safe. Transient failures go to a **DLQ with exponential backoff**;
+`pending_propagation` (delegation not yet synced) is a **delayed requeue**, not a
+failure. A shared **gateway rate-limit / token bucket** across all workers keeps
+total relayer RPS under the cap, with `backfill` yielding to `live`.
+
+We don't build the broker for this submission — it's the "next four hours" — but
+the in-process design is shaped so the move is mechanical: the routing logic
+(`src/decrypt-router.ts`) and the handle-keyed idempotency don't change; only the
+*transport* (a block-interval tick → a queue consumer) and the *store* (PGlite →
+Postgres, one env var) do.
 
 **The honest "what breaks first" (reflection seed):** under load, the backfill
 tick is the fragile piece. If transfer volume outruns decrypt throughput, the

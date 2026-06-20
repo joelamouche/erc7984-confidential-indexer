@@ -302,11 +302,14 @@ This is also exactly why decryption is **decoupled** from the transfer handler
 
 1. **Close the auth hole** — the `X-API-Key` middleware from §8. Cheapest action
    with the highest security payoff; it's the one cut I'm uncomfortable shipping.
-2. **Promote decryption to a real worker against Postgres.** Since the SDK can't
-   run inside Ponder anyway, a standalone worker is its natural home: flip
-   `DATABASE_URL` to Postgres, move the backfill loop into a process that claims
-   work with `SKIP LOCKED`, and write cleartext into a worker-owned `decryptions`
-   table the API joins. Removes the per-tick spawn *and* unlocks horizontal scale.
+2. **Promote decryption to a broker + worker pools.** Since the SDK can't run
+   inside Ponder anyway, standalone workers are its natural home. Move to RabbitMQ
+   with **two queues** — `live.decrypt` (autoscaled, keep head fresh) and
+   `backfill.decrypt` (capped, low-priority, drains a newly-delegated address's
+   whole history) so a delegation storm can't starve realtime — writing cleartext
+   to Postgres. `/v1/health` then reports **two** freshness numbers (live lag vs
+   per-address backfill backlog). Full design in
+   [`docs/INDEXER.md` §6](./docs/INDEXER.md#6-designing-for-scale--and-what-the-brief-actually-asks).
 3. **Exercise + test unwrap/unshield** — the one feature path with no live proof.
 4. **API tests via the DI refactor** — pin pagination, the 404/422 taxonomy, and
    the delegation-quote calldata.
