@@ -155,15 +155,27 @@ delegated decryption only works **~1–2 min later** (the gateway syncs ACL stat
 cross-chain on Arbitrum). So "rights observed" ≠ "rights usable" — they're
 separate states (`pending_rights` → `pending_propagation` → `decrypted`).
 
-**Delegation facilitation — and the security boundary I won't cross.** Partners
-need a frictionless way for their users to grant rights. The SDK's
-`sdk.delegations.delegateDecryption(...)` signs+sends from the configured signer,
-which would mean the indexer holding user keys — a non-starter. Instead the API
-exposes `POST .../delegations/quote` that returns an **unsigned** tx
-(`{ to: aclAddress, data, chainId }`) built with the SDK's calldata-only helper
-`delegateForUserDecryptionContract(...)`; the user's wallet signs and sends. The
-indexer constructs intent, the user authorizes. A `GET .../delegations/:address`
-status route (backed by `sdk.delegations.isActive`/`getExpiry`) closes the loop.
+**Delegation facilitation — and what I'm *not* satisfied with.** Partners need a
+way for their users to grant rights. `POST .../delegations/quote` returns both the
+inputs for the SDK's `delegateDecryption(...)` (preferred) and a raw unsigned tx
+(fallback); a `GET .../delegations/:address` status route closes the loop. The
+indexer never holds a user key.
+
+**But I'm not happy with this endpoint, and want to be honest about why.** The
+whole pitch of the SDK is to *abstract the crypto plumbing* — yet here the user
+still has to sign a transaction themselves. The unavoidable core is that delegation
+is the user's **authorization**: you cannot grant decrypt rights over someone's
+data without their signature, and no SDK can (or should) remove that. So *some*
+user signature is irreducible. What the SDK abstracts is only the tx
+*construction/sending* — which is exactly why the better shape is to return
+`sdkDelegateInput` (`{ contractAddress, delegateAddress }`) and let the partner
+call `sdk.delegations.delegateDecryption(...)` in the user's wallet context, rather
+than hand them raw calldata. I switched the endpoint to lead with that. It still
+leaves a wallet-signature step in the UX, which is the honest limit of "abstract
+FHE away from the wallet": **rights delegation is a wallet action, not an indexer
+action.** A v2 worth exploring: EIP-712 *typed-data* delegation (sign a message,
+not a tx) if/when the ACL supports a permit-style grant — same authorization, less
+friction.
 
 **Correction logged:** the first research pass reported the ACL grant as taking
 an `address[] contractAddresses`. The on-chain function is

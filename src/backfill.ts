@@ -76,6 +76,7 @@ async function backfillTransfers(db: Context["db"], token: Address, blockTime: b
   }));
 
   const update: Update = async (id, patch) => {
+    if (patch.state === "decrypted") console.log(`[backfill] decrypted transfer ${id} = ${patch.amount} (via ${patch.via})`);
     await db.update(transfers, { id }).set((row) => ({
       amount: patch.amount ?? row.amount,
       decryptionState: patch.state,
@@ -85,6 +86,7 @@ async function backfillTransfers(db: Context["db"], token: Address, blockTime: b
     }));
   };
 
+  if (items.length) console.log(`[backfill] ${items.length} transfer(s) pending + due; routing to decrypt…`);
   await routeAndDecrypt(token, HOLDER, activeDelegators, items, runDecryptSubprocess, update);
 }
 
@@ -101,6 +103,7 @@ async function backfillBalances(db: Context["db"], token: Address, blockTime: bi
   );
 
   const update: Update = async (id, patch) => {
+    if (patch.state === "decrypted") console.log(`[backfill] decrypted balance  ${id} = ${patch.amount} (via ${patch.via})`);
     await db.update(balances, { id }).set((row) => ({
       balance: patch.amount ?? row.balance,
       decryptionState: patch.state,

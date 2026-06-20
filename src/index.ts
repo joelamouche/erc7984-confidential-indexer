@@ -84,6 +84,10 @@ ponder.on("ConfidentialToken:ConfidentialTransfer", async ({ event, context }) =
   // Track the confidential balance handle for each party.
   await upsertBalanceHandle(context, token, from, event.block.number);
   await upsertBalanceHandle(context, token, to, event.block.number);
+
+  console.log(
+    `[index] ${classifyKind(from, to).padEnd(8)} ${from.slice(0, 8)}→${to.slice(0, 8)} block=${event.block.number} handle=${event.args.amount.slice(0, 12)}… (pending_rights)`,
+  );
 });
 
 // Public cleartext reveal — fills any row carrying this exact handle, no rights needed.
@@ -102,6 +106,7 @@ ponder.on("ConfidentialToken:UnwrapRequested", async ({ event, context }) => {
     .update(transfers)
     .set({ unwrapStatus: "requested" })
     .where(eq(transfers.amountHandle, event.args.unwrapRequestId));
+  console.log(`[index] unwrap REQUESTED handle=${event.args.unwrapRequestId.slice(0, 12)}… (awaiting gateway finalize)`);
 });
 
 // Unshield step 2: the gateway finalized — the cleartext unwrap amount is on-chain
@@ -116,6 +121,7 @@ ponder.on("ConfidentialToken:UnwrapFinalized", async ({ event, context }) => {
       unwrapStatus: "finalized",
     })
     .where(eq(transfers.amountHandle, event.args.encryptedAmount));
+  console.log(`[index] unwrap FINALIZED cleartext=${event.args.cleartextAmount} (ERC-20 released)`);
 });
 
 // ACL rights discovery — only events naming our holder as delegate reach here.
@@ -135,6 +141,7 @@ ponder.on("Acl:DelegatedForUserDecryption", async ({ event, context }) => {
     observedAtBlock: event.block.number,
   };
   await context.db.insert(delegations).values(row).onConflictDoUpdate(row);
+  console.log(`[acl]   DELEGATION observed: ${delegator.slice(0, 8)} → holder; promoting their pending rows for backfill`);
 
   // Event-driven promotion: this delegator's pending amounts/balances are now
   // eligible — move them to pending_propagation and clear the backoff so the next

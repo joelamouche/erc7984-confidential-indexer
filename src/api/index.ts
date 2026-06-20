@@ -158,11 +158,15 @@ app.get("/v1/tokens/:token/delegations/:address", async (c) => {
   );
 });
 
-// Build the unsigned tx the user signs to grant the holder decrypt rights.
+// How a user grants the indexer holder decrypt rights. Delegation is the user's
+// own authorization, so the user must sign — that part is irreducible. We return
+// (a) the inputs for the SDK's `delegateDecryption` (preferred: the partner calls
+// it in the user's wallet context, staying inside the SDK), and (b) a raw unsigned
+// tx as a no-SDK fallback. The indexer never holds a user key. See DECISIONS §5.
 app.post("/v1/tokens/:token/delegations/quote", async (c) => {
   const token = requireToken(c.req.param("token"));
   const holder = accounts.indexerHolder.address;
-  // Default: permanent (uint64 max). Callers can pass an expiry seconds value.
+  // Default: permanent (uint64 max). Callers can pass an expiry (unix seconds).
   const body = await c.req.json().catch(() => ({}) as { expiry?: number | string });
   const expiry = body.expiry !== undefined ? BigInt(body.expiry) : (1n << 64n) - 1n;
 
@@ -173,11 +177,17 @@ app.post("/v1/tokens/:token/delegations/quote", async (c) => {
   });
   return c.json(
     jsonable({
-      to: env.ACL_ADDRESS,
-      data,
-      value: "0x0",
-      chainId: env.CHAIN_ID,
-      description: `Grants the indexer holder ${holder} decrypt rights over ${token}. The user signs and sends this from their own wallet.`,
+      delegateAddress: holder,
+      token,
+      // Preferred: `sdk.delegations.delegateDecryption(sdkDelegateInput)` from the
+      // user's wallet. Omit expirationDate for permanent; else pass a JS Date.
+      sdkDelegateInput: { contractAddress: token, delegateAddress: holder },
+      // Fallback if not using the SDK: user's wallet signs+sends this.
+      unsignedTx: { to: env.ACL_ADDRESS, data, value: "0x0", chainId: env.CHAIN_ID },
+      note:
+        "Delegation is the user's authorization to grant the indexer decrypt rights, so the user must sign. " +
+        "The SDK abstracts building/sending the tx (call delegateDecryption with sdkDelegateInput in the user's " +
+        "wallet context), not the signature itself. unsignedTx is a no-SDK fallback. The indexer never holds a user key.",
     }),
   );
 });

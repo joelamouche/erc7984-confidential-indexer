@@ -53,6 +53,16 @@ Point at: Ponder's TUI — it indexes **two** contracts (the ERC-7984 token *and
 the fhEVM **ACL**, filtered to our holder), and serves the API at
 `http://localhost:42069`. Leave it running.
 
+**Watch the activity logs here** — the indexer narrates what it's doing, which is
+the whole point of pointing the camera at this terminal:
+- `[index] shield/transfer/unshield …→… (pending_rights)` — each event as it's indexed
+- `[acl]   DELEGATION observed: … → holder` — a user granting rights
+- `[backfill] N transfer(s) pending + due; routing to decrypt…` and
+  `[backfill] decrypted transfer … = 40000000 (via delegation)` — the decryption
+
+On a fresh start you'll see a burst of `[index]` lines (the history) followed by
+`[backfill] decrypted …` as it catches up.
+
 ---
 
 ## Terminal 2 — the walkthrough
@@ -107,26 +117,68 @@ curl -s "localhost:42069/v1/tokens/$TOKEN/balances/$U1" | jqp   # pending_rights
 curl -s -X POST "localhost:42069/v1/tokens/$TOKEN/delegations/quote" | jqp
 ```
 
-Point at: the API returns an **unsigned** transaction (`to` = ACL contract,
-`data`, `chainId`). The wallet has its user sign and send it; the indexer only
-*builds* it. Then `GET .../delegations/$U1` shows whether a user has delegated.
+Point at: the API returns `sdkDelegateInput` (`{ contractAddress, delegateAddress }`)
+for `sdk.delegations.delegateDecryption(...)` — the partner calls that in the
+user's wallet context — plus a raw `unsignedTx` fallback. **Honest caveat to
+mention on camera:** the user still has to sign, because delegation *is* the user's
+authorization — no SDK can remove that. What the SDK abstracts is building/sending
+the tx, not the signature. (See DECISIONS §5 — I'm explicitly not fully satisfied
+with this; a typed-data permit would be the nicer v2.)
 
-### 6. Live indexing — send an event on camera
+### 6. ⭐ The headline — a user opts in, and watch the backfill live
 
-With Terminal 1 still running, in Terminal 2:
+This is the whole thesis in one move. **user1 is not delegated** (step 3). Have
+them delegate, then watch Terminal 1 and `/v1/health` react.
 
 ```bash
-npm run transfer -- 0 1 5     # user0 sends 5 cUSD to user1 (SDK-encrypted)
+npm run delegate -- 1          # user1 grants the indexer decrypt rights (ACL tx)
 ```
 
-Wait ~15–20s, then re-run the user1 history:
+Immediately on **Terminal 1** you'll see:
+```
+[acl]   DELEGATION observed: 0xA05a9A → holder; promoting their pending rows for backfill
+```
+Now check the backlog — it should **jump**, because user1's history just became
+work we're *entitled* to do:
 
 ```bash
-curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U1/transfers" | jqp
+curl -s localhost:42069/v1/health | jqp     # decryptable.pending > 0, oldestAgeSeconds large
+```
+
+Wait ~1–2 min (the gateway syncs the delegation cross-chain — `pending_propagation`
+in the meantime). Terminal 1 then prints:
+```
+[backfill] decrypted transfer 0x…- = 250000000 (via delegation)
+[backfill] decrypted balance  …    = … (via delegation)
+```
+And the API flips:
+
+```bash
+curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U1/transfers" | jqp   # user1's history now cleartext
+curl -s localhost:42069/v1/health | jqp                                   # decryptable.pending back to 0
+```
+
+That's the full loop: **opt-in → ACL event → promote → backfill → cleartext**, with
+the health endpoint showing the backlog rise and drain (ref. issue #5).
+
+### 7. (Optional) Live indexing — a brand-new event on camera
+
+With Terminal 1 still running:
+
+```bash
+npm run transfer -- 0 2 5     # user0 sends 5 cUSD to user2 (SDK-encrypted)
+```
+
+Wait ~15–20s (watch Terminal 1 for the `[index] transfer …` then
+`[backfill] decrypted transfer …` lines), then re-run user2's history:
+
+```bash
+curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U2/transfers" | jqp
 ```
 
 Point at: the new transfer appears **live** (no restart, no re-scan) and is
-already `decrypted` (user0 is delegated). That's realtime indexing + decrypt.
+already `decrypted` (user0, the sender, is delegated). That's realtime indexing +
+decrypt.
 
 ---
 
