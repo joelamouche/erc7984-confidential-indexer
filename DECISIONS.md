@@ -151,9 +151,40 @@ spin on speculative decrypts.
 
 **A timing subtlety I'm encoding (verified on-chain):** the
 `DelegatedForUserDecryption` event is emitted **immediately** at grant, but
-delegated decryption only works **~1–2 min later** (the gateway syncs ACL state
-cross-chain on Arbitrum). So "rights observed" ≠ "rights usable" — they're
-separate states (`pending_rights` → `pending_propagation` → `decrypted`).
+delegated decryption only works after the gateway syncs the ACL state cross-chain
+(it runs on Arbitrum). So "rights observed" ≠ "rights usable" — they're separate
+states (`pending_rights` → `pending_propagation` → `decrypted`).
+
+**How do we know propagation has happened? We don't check — we *try*.** There is
+no propagation status to poll: `sdk.delegations.isActive`/`getExpiry` read the
+**host-chain** ACL, which returns `true` the instant the grant tx mines (before the
+gateway has synced), so they confirm the grant *exists*, not that it's *usable*.
+The authoritative "has the gateway synced" lives in the gateway's own ACL copy,
+which the SDK doesn't expose as a pre-flight query. So the mechanism is **reactive
+retry**: the ACL handler promotes a delegator's rows to `pending_propagation` and
+clears their backoff; the backfill re-attempts the delegated decrypt each tick;
+while the gateway is behind, the SDK throws `DelegationNotPropagatedError` and we
+stay `pending_propagation`; **the first attempt that returns cleartext instead of
+throwing *is* the signal** — the row flips to `decrypted`. Propagation is observed,
+not queried.
+
+**Measured propagation time: ~4 seconds, not "1–2 minutes."** The SDK docs cite
+~1–2 min as the worst case, and I'd been quoting that. I measured it directly
+(delegate a fresh user → poll the delegated decrypt every 1s → time to first
+success): **user1 = 3.9s, user2 = 3.5s, both on the first attempt.** So on Sepolia
+today it's seconds, and the user-visible flip is gated mainly by our own backfill
+cadence (the block interval), not the gateway. I keep "up to ~1–2 min" as the
+documented worst-case ceiling but no longer treat it as the expected value — which
+also changes the demo (no need to wait minutes; the flip lands within one backfill
+tick).
+
+**Bounding the optimistic state (so a broken grant can't hide).** Because real
+propagation is seconds, a row *still* reporting `DelegationNotPropagatedError` after
+several ticks (minutes) almost certainly isn't propagating — it's a real failure
+the SDK mislabels (it maps a bare relayer HTTP 500 to that error; see §12). The
+backfill therefore **caps `pending_propagation` at `MAX_PROPAGATION_ATTEMPTS`
+(5)** and then escalates the row to `failed`, so it surfaces in `/v1/health`'s
+backlog rather than retrying forever under a reassuring "just propagating" label.
 
 **Delegation facilitation — and what I'm *not* satisfied with.** Partners need a
 way for their users to grant rights. `POST .../delegations/quote` returns both the

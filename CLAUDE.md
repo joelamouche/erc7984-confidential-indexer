@@ -47,8 +47,9 @@ code:
   `UnwrapFinalized.cleartextAmount` is plaintext on-chain.
 - ACL is **per-handle**; persistent rights go only to the handle owner + contract.
   A third party (our indexer holder) decrypts only via `FHE.allow(handle, addr)` /
-  SDK delegation. Delegation has a **~1–2 min gateway propagation delay** on
-  Sepolia (`DelegationNotPropagatedError`).
+  SDK delegation. Delegation has a gateway propagation delay (**measured ~4s** on
+  Sepolia; SDK docs cite up to ~1–2 min worst case) surfaced as
+  `DelegationNotPropagatedError`.
 - New SDK shape: `new ZamaSDK(createConfig({...}))`, `sdk.decryption.decryptValues`,
   `sdk.decryption.delegatedDecryptValues`, `sdk.delegations.delegateDecryption`.
   See [`docs/SDK-NOTES.md`](docs/SDK-NOTES.md).

@@ -5,7 +5,8 @@
  *
  * Reads confidentialBalanceOf(user) on-chain, then delegated-decrypts that handle
  * as the indexer holder. Requires the user to have delegated to the holder first
- * (`npm run delegate`) and ~1–2 min for gateway propagation. Prints the cleartext.
+ * (`npm run delegate`) and a few seconds for gateway propagation (~4s measured).
+ * Prints the cleartext.
  */
 import { DelegationNotPropagatedError } from "@zama-fhe/sdk";
 import { accounts, env } from "../src/config";

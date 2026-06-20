@@ -8,7 +8,7 @@
  * own wallet (the indexer never holds the user key — the API only *builds* this tx
  * via /delegations/quote; here the script signs it for the demo). The indexer then
  * sees the DelegatedForUserDecryption event and backfills that user's amounts after
- * the ~1–2 min gateway propagation window.
+ * the gateway propagation window (measured ~4s on Sepolia; up to ~1–2 min worst case).
  */
 import { createWalletClient, http, maxUint64, parseGwei } from "viem";
 import { accounts, env } from "../src/config";
@@ -42,7 +42,7 @@ async function main() {
   console.log(`delegation tx: ${hash}`);
   await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
   console.log(`\n✅ Delegated. The indexer will pick up the ACL event and backfill ${user.role}'s amounts`);
-  console.log(`   after the gateway propagation window (~1–2 min).`);
+  console.log(`   after the gateway propagation window (~4s measured; up to ~1–2 min worst case).`);
 }
 
 main().catch((err) => {

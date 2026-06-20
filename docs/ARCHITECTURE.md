@@ -123,7 +123,7 @@ Every amount handle (transfer or unwrap) carries an explicit state. This is the
   `pending_propagation`. (A periodic `sdk.delegations.isActive` sweep is the
   fallback for anything missed.)
 - `pending_propagation` → rights observed on-chain but the gateway hasn't synced
-  yet (the event is immediate, decryption lags ~1–2 min). Short retry loop;
+  yet (the event is immediate, decryption lags ~4s measured). Short retry loop;
   `DelegationNotPropagatedError` keeps it here rather than failing.
 - `failed` → exponential backoff, capped retries, then surfaced as `failed` (not
   hidden) so the partner can see the indexer couldn't decrypt.

@@ -87,7 +87,8 @@ const { items } = await sdk.decryption.delegatedBatchDecryptValues({
   `sdk.delegations.getExpiry({...})`. `delegatedDecryptValues` fail-fasts with
   `DelegationNotFoundError`/`DelegationExpiredError` **before** any network call.
 - **Propagation window (critical for the backfill loop):** the on-chain grant is
-  immediate, but the gateway must sync cross-chain — **~1–2 min on Sepolia**.
+  immediate, but the gateway must sync cross-chain — **measured ~4s on Sepolia**
+  (the SDK docs cite up to ~1–2 min as the worst case).
   Decrypting in that window throws **`DelegationNotPropagatedError`** (heuristically
   mapped from an HTTP 500). The official example retries 5× at 30s. **The on-chain
   delegation _event_ is emitted immediately at grant time** — only the

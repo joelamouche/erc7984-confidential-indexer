@@ -34,11 +34,13 @@ export default createConfig({
   },
   blocks: {
     // Drives the decryption backfill, decoupled from per-transfer events.
-    // interval 5 ≈ every ~60s on Sepolia — roughly the delegation propagation window.
+    // interval 2 ≈ every ~24s on Sepolia. Since gateway propagation is ~4s (measured),
+    // the user-visible flip after a delegation is gated by this cadence — keep it
+    // tight so freshly-granted rows decrypt promptly (and the demo flips quickly).
     Backfill: {
       chain: "sepolia",
       startBlock: env.START_BLOCK,
-      interval: 5,
+      interval: 2,
     },
   },
 });

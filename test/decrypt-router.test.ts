@@ -7,7 +7,14 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { getAddress, type Hex } from "viem";
-import { routeAndDecrypt, type DecryptItem, type DecryptJob, type Patch } from "../src/decrypt-router";
+import {
+  escalateState,
+  MAX_PROPAGATION_ATTEMPTS,
+  routeAndDecrypt,
+  type DecryptItem,
+  type DecryptJob,
+  type Patch,
+} from "../src/decrypt-router";
 
 const HOLDER = getAddress("0x1111111111111111111111111111111111111111");
 const TOKEN = getAddress("0x2222222222222222222222222222222222222222");
@@ -90,5 +97,23 @@ describe("routeAndDecrypt", () => {
 
     expect(patches.get("holder-1")).toEqual({ state: "failed", via: null });
     expect(patches.get("deleg-1")).toEqual({ state: "failed", via: null });
+  });
+});
+
+describe("escalateState", () => {
+  it("keeps pending_propagation within the grace window", () => {
+    expect(escalateState("pending_propagation", 1)).toBe("pending_propagation");
+    expect(escalateState("pending_propagation", MAX_PROPAGATION_ATTEMPTS - 1)).toBe("pending_propagation");
+  });
+
+  it("escalates pending_propagation to failed once the window is exhausted", () => {
+    expect(escalateState("pending_propagation", MAX_PROPAGATION_ATTEMPTS)).toBe("failed");
+    expect(escalateState("pending_propagation", MAX_PROPAGATION_ATTEMPTS + 3)).toBe("failed");
+  });
+
+  it("never rewrites other states (decrypted / pending_rights / failed pass through)", () => {
+    expect(escalateState("decrypted", 99)).toBe("decrypted");
+    expect(escalateState("pending_rights", 99)).toBe("pending_rights");
+    expect(escalateState("failed", 99)).toBe("failed");
   });
 });

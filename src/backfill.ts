@@ -16,7 +16,7 @@ import { getAddress, zeroAddress, type Address } from "viem";
 import { env } from "./config";
 import { HOLDER } from "./zama/sdk";
 import type { DecryptState } from "./zama/state";
-import { routeAndDecrypt, type DecryptItem, type DecryptJob, type DecryptResult, type Update } from "./decrypt-router";
+import { escalateState, routeAndDecrypt, type DecryptItem, type DecryptJob, type DecryptResult, type Update } from "./decrypt-router";
 
 /**
  * Run decryption in a plain-Node child process (the SDK can't run inside Ponder's
@@ -79,7 +79,7 @@ async function backfillTransfers(db: Context["db"], token: Address, blockTime: b
     if (patch.state === "decrypted") console.log(`[backfill] decrypted transfer ${id} = ${patch.amount} (via ${patch.via})`);
     await db.update(transfers, { id }).set((row) => ({
       amount: patch.amount ?? row.amount,
-      decryptionState: patch.state,
+      decryptionState: escalateState(patch.state, row.attempts + 1),
       decryptedVia: patch.via ?? row.decryptedVia,
       attempts: row.attempts + 1,
       lastAttemptAt: blockTime,
@@ -106,7 +106,7 @@ async function backfillBalances(db: Context["db"], token: Address, blockTime: bi
     if (patch.state === "decrypted") console.log(`[backfill] decrypted balance  ${id} = ${patch.amount} (via ${patch.via})`);
     await db.update(balances, { id }).set((row) => ({
       balance: patch.amount ?? row.balance,
-      decryptionState: patch.state,
+      decryptionState: escalateState(patch.state, row.attempts + 1),
       attempts: row.attempts + 1,
       lastAttemptAt: blockTime,
     }));

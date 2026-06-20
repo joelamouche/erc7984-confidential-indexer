@@ -20,7 +20,7 @@ export function errorToState(err: unknown): DecryptState {
   if (err instanceof DelegationNotFoundError || err instanceof DelegationExpiredError) {
     return "pending_rights";
   }
-  // Grant exists on-chain but the gateway hasn't synced it yet (~1–2 min).
+  // Grant exists on-chain but the gateway hasn't synced it yet (~4s measured).
   if (err instanceof DelegationNotPropagatedError) return "pending_propagation";
   // RelayerRequestFailed / DecryptionFailed / unknown → transient, back off.
   return "failed";

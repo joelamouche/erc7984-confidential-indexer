@@ -145,8 +145,8 @@ work we're *entitled* to do:
 curl -s localhost:42069/v1/health | jqp     # decryptable.pending > 0, oldestAgeSeconds large
 ```
 
-Wait ~1–2 min (the gateway syncs the delegation cross-chain — `pending_propagation`
-in the meantime). Terminal 1 then prints:
+Wait only a few seconds (measured ~4s gateway sync on Sepolia; the flip is gated by
+the next backfill tick, not minutes). Terminal 1 then prints:
 ```
 [backfill] decrypted transfer 0x…- = 250000000 (via delegation)
 [backfill] decrypted balance  …    = … (via delegation)
@@ -200,8 +200,8 @@ npm run dev                          # indexer + API
 
 # Terminal 2 — drive the scenarios
 npm run delegate                     # user0 delegates to the holder (ACL event)
-#   ⏳ wait ~1–2 min: the gateway must sync the delegation before decrypt works.
-#      Watch a shield flip pending_rights -> decrypted in the API (the backfill).
+#   ⏳ wait a few seconds (gateway sync ~4s) + the next backfill tick: a shield
+#      flips pending_rights -> decrypted in the API.
 npm run transfer -- 0 1 40           # cleartext to both (user0 delegated)
 npm run transfer -- 1 2 30           # pending (neither delegated)
 npm run unshield -- 0 20             # unshield; kind=unshield, unwrapStatus=requested
@@ -210,9 +210,11 @@ npm run unshield -- 0 20             # unshield; kind=unshield, unwrapStatus=req
 Timing notes for the recording:
 - **Indexer catch-up** from the deploy block is seconds-to-~2-min depending on how
   old the deploy is (drpc is ~23 req/s). `/v1/health` shows the progress.
-- **Delegation propagation** is ~1–2 min (the gateway syncs ACL state cross-chain).
-  That's why a freshly-delegated user's amounts sit in `pending_propagation`
-  briefly before flipping to `decrypted`.
+- **Delegation propagation** is fast — **measured ~4s** on Sepolia (SDK docs cite
+  up to ~1–2 min as the worst case). A freshly-delegated user's amounts sit in
+  `pending_propagation` only until the next backfill tick, then flip to
+  `decrypted`. So the user-visible wait is mostly the backfill cadence, not the
+  gateway.
 
 ## Tests (optional to show)
 

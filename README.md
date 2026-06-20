@@ -67,7 +67,7 @@ npm run seed         # users mint + wrap (shield) -> ConfidentialTransfer events
 npm run dev          # start indexer + API: shields show up as kind=shield, decryptionState=pending_rights
 
 # in another shell — a user grants the indexer decrypt rights, then it backfills cleartext:
-npm run delegate     # user0 delegates to the holder (ACL event). After ~1-2 min gateway sync,
+npm run delegate     # user0 delegates to the holder (ACL event). After ~4s gateway sync,
                      # the backfill decrypts user0's amounts -> decryptionState=decrypted, amount=cleartext.
                      # user1/user2 never delegate -> stay pending_rights (indexed, not dropped).
 
