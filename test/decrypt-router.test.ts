@@ -6,7 +6,7 @@
  * per-group error→state mapping, and whole-job failure.
  */
 import { describe, expect, it, vi } from "vitest";
-import { getAddress, type Address, type Hex } from "viem";
+import { getAddress, type Hex } from "viem";
 import { routeAndDecrypt, type DecryptItem, type DecryptJob, type Patch } from "../src/decrypt-router";
 
 const HOLDER = getAddress("0x1111111111111111111111111111111111111111");

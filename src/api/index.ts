@@ -8,7 +8,7 @@
 import { db } from "ponder:api";
 import { transfers, balances, delegations } from "ponder:schema";
 import { Hono } from "hono";
-import { and, count, desc, eq, lt, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, or, sql } from "drizzle-orm";
 import { encodeFunctionData, getAddress, isAddress } from "viem";
 import { accounts, env } from "../config";
 import { aclAbi } from "../abis/acl";
@@ -191,7 +191,7 @@ app.get("/v1/health", async (c) => {
   const backlog = Object.fromEntries(backlogRows.map((r) => [r.state, Number(r.n)]));
 
   // Authoritative synced head comes from Ponder's own /status.
-  let chainHead: number | null = null;
+  const chainHead: number | null = null;
   let indexedBlock: number | null = null;
   let secondsBehind: number | null = null;
   try {

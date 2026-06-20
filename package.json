@@ -23,7 +23,8 @@
     "delegate": "tsx scripts/delegate.ts",
     "decrypt:check": "tsx scripts/decrypt-check.ts",
     "transfer": "tsx scripts/transfer.ts",
-    "unshield": "tsx scripts/unshield.ts"
+    "unshield": "tsx scripts/unshield.ts",
+    "lint": "eslint ."
   },
   "dependencies": {
     "@zama-fhe/sdk": "3.1.0-alpha.15",
@@ -35,9 +36,12 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^22.10.0",
+    "eslint": "^9.39.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.61.1",
     "vitest": "^4.1.9"
   }
 }
