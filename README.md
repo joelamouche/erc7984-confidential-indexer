@@ -70,7 +70,18 @@ npm run dev          # start indexer + API: shields show up as kind=shield, decr
 npm run delegate     # user0 delegates to the holder (ACL event). After ~1-2 min gateway sync,
                      # the backfill decrypts user0's amounts -> decryptionState=decrypted, amount=cleartext.
                      # user1/user2 never delegate -> stay pending_rights (indexed, not dropped).
+
+# confidential transfers between users (SDK-encrypted) — sent while the indexer runs,
+# so you watch them get caught LIVE and decrypted-or-not by delegation:
+npm run transfer -- 0 1 40   # user0 (delegated) -> user1: amount comes out CLEARTEXT in BOTH
+                             #   histories — the amount handle is decryptable via user0's delegation,
+                             #   even though user1 never delegated.
+npm run transfer -- 1 2 30   # user1 -> user2: neither delegated -> stays pending_rights.
 ```
+
+> The transfer amount is ACL-allowed for **both** parties, so it decrypts if **either**
+> party delegated to the holder — `npm run transfer -- 0 1 40` shows up as cleartext in
+> user1's history despite user1 never delegating. Balances update too (user0: 100→60).
 
 ### Run the indexer + API on their own
 

@@ -21,7 +21,8 @@
     "test:watch": "vitest",
     "test:contracts": "forge test --root contracts",
     "delegate": "tsx scripts/delegate.ts",
-    "decrypt:check": "tsx scripts/decrypt-check.ts"
+    "decrypt:check": "tsx scripts/decrypt-check.ts",
+    "transfer": "tsx scripts/transfer.ts"
   },
   "dependencies": {
     "@zama-fhe/sdk": "3.1.0-alpha.15",
