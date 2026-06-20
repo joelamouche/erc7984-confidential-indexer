@@ -182,9 +182,30 @@ indexer_status         -- 1 row, for /health: chainHead, lastIndexedBlock, lag, 
 | `GET /v1/tokens/:token/addresses/:address/transfers?cursor=&limit=` | paginated transfer history, cleartext amounts where available, each row carrying its `decryptionState` |
 | `GET /v1/tokens/:token/delegations/:address` | whether `address` has delegated decrypt rights to the indexer holder (`active`, `expiry`) — so a partner can check status |
 | `POST /v1/tokens/:token/delegations/quote` | returns an **unsigned** delegation tx `{ to: aclAddress, data, chainId }` for `address` to grant the holder rights. The indexer builds calldata (`delegateForUserDecryptionContract`); the user's wallet signs+sends. The indexer never holds a user key. |
-| `GET /health` | `{ status, chainHead, lastIndexedBlock, blocksBehind, secondsBehind, decryptBacklog: { pendingRights, pendingPropagation, failed } }` |
+| `GET /v1/health` | `{ status, indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptBacklog: { pendingRights, pendingPropagation, failed, decrypted } }`; `503` when degraded |
 
-Design choices to defend in DECISIONS: cursor pagination (stable under new
+### How far behind is the indexer? (the brief's "how far behind")
+
+"Behind" has **two independent axes**, and `/v1/health` reports both — collapsing
+them into one number would mislead:
+
+- **Indexing lag** (`indexing`): how far the *event* stream trails the chain.
+  `indexedBlock` vs `chainHead` → `blocksBehind`; and `secondsBehind` = wall-clock
+  since the last indexed block's timestamp (from Ponder's own `/status`). `status`
+  is `degraded` (HTTP 503) once `secondsBehind > maxLagSeconds`, so a load balancer
+  can drain a stale replica.
+- **Decryption lag** (`decryptBacklog`): how far *cleartext* trails the events —
+  counts of `pendingRights` / `pendingPropagation` / `failed` / `decrypted`. An
+  indexer can be perfectly current on indexing yet have a large decrypt backlog
+  (e.g. right after a big delegation), which is a different kind of "behind."
+
+**At scale** this is exactly where the two-queue design pays off: the single
+`decryptBacklog` splits into **live lag** (near-zero target) vs **per-address
+backfill backlog** ("user X: 73% decrypted"), so a whale's history backfill never
+makes the API read as "hours behind" for everyone who's live. See
+[`docs/INDEXER.md` §6](./INDEXER.md#scaling-out-two-queues--worker-pools-rabbitmq).
+
+Other design choices to defend in DECISIONS: cursor pagination (stable under new
 inserts), `decryptionState` on every amount-bearing row (honesty over a clean
 lie), error taxonomy (`404 unknown token`, `422 bad address`, `503` when the
 indexer is too far behind a freshness threshold), and a partner-facing reason

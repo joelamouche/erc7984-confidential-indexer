@@ -5,7 +5,7 @@
  * row carries its `decryptionState` so partners see the truth, not a clean lie.
  * Ponder also mounts /health, /ready, /status itself; ours add the domain views.
  */
-import { db } from "ponder:api";
+import { db, publicClients } from "ponder:api";
 import { transfers, balances, delegations } from "ponder:schema";
 import { Hono } from "hono";
 import { and, count, desc, eq, or, sql } from "drizzle-orm";
@@ -190,14 +190,16 @@ app.get("/v1/health", async (c) => {
     .groupBy(transfers.decryptionState);
   const backlog = Object.fromEntries(backlogRows.map((r) => [r.state, Number(r.n)]));
 
-  // Authoritative synced head comes from Ponder's own /status.
-  const chainHead: number | null = null;
+  // Indexing lag: last block Ponder has indexed (+ its timestamp) vs the chain head.
   let indexedBlock: number | null = null;
   let secondsBehind: number | null = null;
+  let chainHead: number | null = null;
+  let blocksBehind: number | null = null;
   try {
+    // Ponder's own /status: the authoritative synced head per chain.
     const status = (await fetch(`http://localhost:${env.PORT}/status`).then((r) => r.json())) as Record<
       string,
-      { block?: { number?: number; timestamp?: number }; id?: number }
+      { block?: { number?: number; timestamp?: number } }
     >;
     const chainStatus = Object.values(status)[0];
     indexedBlock = chainStatus?.block?.number ?? null;
@@ -206,15 +208,19 @@ app.get("/v1/health", async (c) => {
   } catch {
     /* status not ready yet */
   }
+  try {
+    chainHead = Number(await publicClients.sepolia.getBlockNumber());
+    if (indexedBlock != null) blocksBehind = Math.max(0, chainHead - indexedBlock);
+  } catch {
+    /* RPC unavailable */
+  }
 
+  // "How far behind" has two axes: indexing lag (above) and decryption lag (below).
   const healthy = secondsBehind === null || secondsBehind <= env.MAX_LAG_SECONDS;
   return c.json(
     {
       status: healthy ? "ok" : "degraded",
-      indexedBlock,
-      chainHead,
-      secondsBehind,
-      maxLagSeconds: env.MAX_LAG_SECONDS,
+      indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds: env.MAX_LAG_SECONDS },
       decryptBacklog: {
         pendingRights: backlog.pending_rights ?? 0,
         pendingPropagation: backlog.pending_propagation ?? 0,
