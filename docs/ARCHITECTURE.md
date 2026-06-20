@@ -171,7 +171,8 @@ delegations            -- rights the holder can use, sourced from ACL events
   id (contract-delegator), delegator, contractAddress (or wildcard),
   active, expiry, delegationCounter, observedAtBlock, lastCheckedAt
 
-indexer_status         -- 1 row, for /health: chainHead, lastIndexedBlock, lag, decryptBacklog
+-- /health is computed live (no table): indexing lag (Ponder /status + chain head)
+--   + decryptable backlog (entitled-but-pending size + age) from transfers/balances
 ```
 
 ## Read API (shapes are our design — DX matters)
@@ -182,7 +183,7 @@ indexer_status         -- 1 row, for /health: chainHead, lastIndexedBlock, lag, 
 | `GET /v1/tokens/:token/addresses/:address/transfers?cursor=&limit=` | paginated transfer history, cleartext amounts where available, each row carrying its `decryptionState` |
 | `GET /v1/tokens/:token/delegations/:address` | whether `address` has delegated decrypt rights to the indexer holder (`active`, `expiry`) — so a partner can check status |
 | `POST /v1/tokens/:token/delegations/quote` | returns an **unsigned** delegation tx `{ to: aclAddress, data, chainId }` for `address` to grant the holder rights. The indexer builds calldata (`delegateForUserDecryptionContract`); the user's wallet signs+sends. The indexer never holds a user key. |
-| `GET /v1/health` | `{ status, indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptBacklog: { pendingRights, pendingPropagation, failed, decrypted } }`; `503` when degraded |
+| `GET /v1/health` | `{ status, indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptable: { pending, oldestBlock, oldestAgeSeconds } }`; `503` when degraded |
 
 ### How far behind is the indexer? (the brief's "how far behind")
 
@@ -194,15 +195,19 @@ them into one number would mislead:
   since the last indexed block's timestamp (from Ponder's own `/status`). `status`
   is `degraded` (HTTP 503) once `secondsBehind > maxLagSeconds`, so a load balancer
   can drain a stale replica.
-- **Decryption lag** (`decryptBacklog`): how far *cleartext* trails the events —
-  counts of `pendingRights` / `pendingPropagation` / `failed` / `decrypted`. An
-  indexer can be perfectly current on indexing yet have a large decrypt backlog
-  (e.g. right after a big delegation), which is a different kind of "behind."
+- **Decryption backlog** (`decryptable`): the *actionable* work — rows we are
+  **entitled** to decrypt (a party has an active delegation) but **haven't yet**
+  (`pending_rights` / `pending_propagation` / `failed`). This is deliberately
+  **not** the raw state counts: rows with no delegation aren't our work (they'll
+  never decrypt until the user opts in — not a performance signal), and `decrypted`
+  rows are done. We report **size** (`pending`) *and* **age** (`oldestBlock` +
+  `oldestAgeSeconds` = how long the oldest entitled-but-pending row has waited) —
+  a growing or aging backlog is the real "decryption is falling behind" signal.
 
-**At scale** this is exactly where the two-queue design pays off: the single
-`decryptBacklog` splits into **live lag** (near-zero target) vs **per-address
-backfill backlog** ("user X: 73% decrypted"), so a whale's history backfill never
-makes the API read as "hours behind" for everyone who's live. See
+**At scale** this is exactly where the two-queue design pays off: `decryptable`
+splits into **live lag** (near-zero target) vs **per-address backfill backlog**
+("user X: 73% decrypted"), so a whale's history backfill never makes the API read
+as "hours behind" for everyone who's live. See
 [`docs/INDEXER.md` §6](./INDEXER.md#scaling-out-two-queues--worker-pools-rabbitmq).
 
 Other design choices to defend in DECISIONS: cursor pagination (stable under new

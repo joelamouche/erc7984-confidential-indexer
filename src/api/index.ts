@@ -8,7 +8,7 @@
 import { db, publicClients } from "ponder:api";
 import { transfers, balances, delegations } from "ponder:schema";
 import { Hono } from "hono";
-import { and, count, desc, eq, or, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, inArray, isNull, min, or, sql } from "drizzle-orm";
 import { encodeFunctionData, getAddress, isAddress } from "viem";
 import { accounts, env } from "../config";
 import { aclAbi } from "../abis/acl";
@@ -182,15 +182,12 @@ app.post("/v1/tokens/:token/delegations/quote", async (c) => {
   );
 });
 
-// Decrypt backlog + how far behind the indexer is.
+// "How far behind" on two axes: indexing lag, and the *actionable* decryption
+// backlog — only rows we are ENTITLED to decrypt (a party delegated) but haven't
+// yet. Rows with no delegation aren't our work; decrypted rows are done; neither
+// belongs in a health signal.
 app.get("/v1/health", async (c) => {
-  const backlogRows = await db
-    .select({ state: transfers.decryptionState, n: count() })
-    .from(transfers)
-    .groupBy(transfers.decryptionState);
-  const backlog = Object.fromEntries(backlogRows.map((r) => [r.state, Number(r.n)]));
-
-  // Indexing lag: last block Ponder has indexed (+ its timestamp) vs the chain head.
+  // --- Indexing lag ---
   let indexedBlock: number | null = null;
   let secondsBehind: number | null = null;
   let chainHead: number | null = null;
@@ -215,18 +212,67 @@ app.get("/v1/health", async (c) => {
     /* RPC unavailable */
   }
 
-  // "How far behind" has two axes: indexing lag (above) and decryption lag (below).
+  // --- Decryption backlog (size + age) ---
+  // Addresses we currently hold usable decrypt rights for.
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  const dels = await db
+    .select({ delegator: delegations.delegator })
+    .from(delegations)
+    .where(and(eq(delegations.active, true), gt(delegations.expiry, nowSec)));
+  const delegators = dels.map((d) => d.delegator);
+
+  const NOT_DECRYPTED: ("pending_rights" | "pending_propagation" | "failed")[] = [
+    "pending_rights",
+    "pending_propagation",
+    "failed",
+  ];
+  let pending = 0;
+  let oldestBlock: number | null = null;
+  if (delegators.length > 0) {
+    // Pending transfers where a party (from/to) is an active delegator.
+    const [tAgg] = await db
+      .select({ n: count(), oldest: min(transfers.blockNumber) })
+      .from(transfers)
+      .where(
+        and(
+          isNull(transfers.amount),
+          inArray(transfers.decryptionState, NOT_DECRYPTED),
+          or(inArray(transfers.from, delegators), inArray(transfers.to, delegators)),
+        ),
+      );
+    // Pending balances for an active delegator.
+    const [bAgg] = await db
+      .select({ n: count(), oldest: min(balances.updatedAtBlock) })
+      .from(balances)
+      .where(
+        and(
+          isNull(balances.balance),
+          inArray(balances.decryptionState, NOT_DECRYPTED),
+          inArray(balances.account, delegators),
+        ),
+      );
+    pending = Number(tAgg?.n ?? 0) + Number(bAgg?.n ?? 0);
+    const oldest = [tAgg?.oldest, bAgg?.oldest].filter((x): x is bigint => x != null).map(Number);
+    oldestBlock = oldest.length ? Math.min(...oldest) : null;
+  }
+
+  // Age of the backlog: wall-clock since the oldest still-pending entitled row.
+  let oldestAgeSeconds: number | null = null;
+  if (oldestBlock != null) {
+    try {
+      const blk = await publicClients.sepolia.getBlock({ blockNumber: BigInt(oldestBlock) });
+      oldestAgeSeconds = Math.max(0, Math.floor(Date.now() / 1000) - Number(blk.timestamp));
+    } catch {
+      /* RPC unavailable */
+    }
+  }
+
   const healthy = secondsBehind === null || secondsBehind <= env.MAX_LAG_SECONDS;
   return c.json(
     {
       status: healthy ? "ok" : "degraded",
       indexing: { indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds: env.MAX_LAG_SECONDS },
-      decryptBacklog: {
-        pendingRights: backlog.pending_rights ?? 0,
-        pendingPropagation: backlog.pending_propagation ?? 0,
-        failed: backlog.failed ?? 0,
-        decrypted: backlog.decrypted ?? 0,
-      },
+      decryptable: { pending, oldestBlock, oldestAgeSeconds },
     },
     healthy ? 200 : 503,
   );

@@ -64,9 +64,10 @@ curl -s localhost:42069/v1/health | jqp
 ```
 
 Point at the **two axes**: `indexing` (blocksBehind / secondsBehind vs the chain
-head) and `decryptBacklog` (how much cleartext is still pending). If you're
-recording the catch-up, re-run this and watch `blocksBehind` fall to 0 and
-`status` flip `degraded → ok`.
+head) and `decryptable` (the backlog we're *entitled* to decrypt but haven't —
+`pending` count + `oldestAgeSeconds`, i.e. size **and** age). If you're recording
+the catch-up, re-run this and watch `blocksBehind` fall to 0, `decryptable.pending`
+drain to 0 as the backfill runs, and `status` flip `degraded → ok`.
 
 ### 2. A delegated user's history — all cleartext
 
