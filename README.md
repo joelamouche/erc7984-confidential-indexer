@@ -77,6 +77,9 @@ npm run transfer -- 0 1 40   # user0 (delegated) -> user1: amount comes out CLEA
                              #   histories — the amount handle is decryptable via user0's delegation,
                              #   even though user1 never delegated.
 npm run transfer -- 1 2 30   # user1 -> user2: neither delegated -> stays pending_rights.
+
+# unshield (unwrap confidential -> ERC-20) — the burn is decrypted via delegation:
+npm run unshield -- 0 20     # user0 unwraps 20 cUSD; indexed as kind=unshield, cleartext via delegation.
 ```
 
 > The transfer amount is ACL-allowed for **both** parties, so it decrypts if **either**

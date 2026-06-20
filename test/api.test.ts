@@ -3,8 +3,8 @@
  * asks for: an on-chain event in → cleartext out of the API).
  *
  * Requires the live demo state: `npm run dev` running, then `npm run seed`,
- * `npm run delegate` (user0 only), and the two transfers
- * `npm run transfer -- 0 1 40` and `npm run transfer -- 1 2 30`. If the API isn't
+ * `npm run delegate` (user0 only), `npm run transfer -- 0 1 40`,
+ * `npm run transfer -- 1 2 30`, and `npm run unshield -- 0 20`. If the API isn't
  * reachable these skip (so a fresh `npm test` stays green on the unit tests). See
  * README "Tests".
  *
@@ -94,6 +94,12 @@ const SCENARIOS: Scenario[] = [
     queryAddr: user1,
     match: (t) => t.kind === "transfer" && addr(t.from) === user1 && addr(t.to) === user2,
     cleartext: null,
+  },
+  {
+    name: "unshield by delegated user0 (burn): cleartext via delegation",
+    queryAddr: user0,
+    match: (t) => t.kind === "unshield" && addr(t.from) === user0,
+    cleartext: "20000000",
   },
 ];
 
