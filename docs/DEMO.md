@@ -78,8 +78,8 @@ head) and `decryptable` (the backlog we're *entitled* to decrypt but haven't —
 `pending` count + `oldestAgeSeconds`, i.e. size **and** age). If you're recording
 the catch-up, re-run this and watch `blocksBehind` fall to 0,
 `decryptable.inFlight` drain to 0 as the backfill runs, and `status` flip
-`degraded → ok` (it's `ok` only when **both** `indexing.healthy` and
-`decryptable.healthy` are true).
+`degraded → ok` (overall `status` is the worst of `indexing.status` and
+`decryptable.status`, each `ok | degraded | down`).
 
 ### 2. A delegated user's history — all cleartext
 

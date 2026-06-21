@@ -183,30 +183,33 @@ delegations            -- rights the holder can use, sourced from ACL events
 | `GET /v1/tokens/:token/addresses/:address/transfers?cursor=&limit=` | paginated transfer history, cleartext amounts where available, each row carrying its `decryptionState` |
 | `GET /v1/tokens/:token/delegations/:address` | whether `address` has delegated decrypt rights to the indexer holder (`active`, `expiry`) — so a partner can check status |
 | `POST /v1/tokens/:token/delegations/quote` | returns an **unsigned** delegation tx `{ to: aclAddress, data, chainId }` for `address` to grant the holder rights. The indexer builds calldata (`delegateForUserDecryptionContract`); the user's wallet signs+sends. The indexer never holds a user key. |
-| `GET /v1/health` | `{ status, indexing: { healthy, indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptable: { healthy, inFlight, failed, oldestBlock, oldestAgeSeconds } }`; `503` when degraded |
+| `GET /v1/health` | `{ status, indexing: { status, indexedBlock, chainHead, blocksBehind, secondsBehind, maxLagSeconds }, decryptable: { status, inFlight, failed, oldestBlock, oldestAgeSeconds, maxLagSeconds } }`; each axis `status` is `ok\|degraded\|down`, overall is the worst; HTTP `503` unless `ok` |
 
 ### How far behind is the indexer? (the brief's "how far behind")
 
-"Behind" has **two independent axes**, each with its own `healthy` flag, and the
-top-level `status` is the **worse of the two** (`ok` only if both healthy; `503`
-otherwise). Collapsing them into one number would mislead.
+"Behind" has **two independent axes**, each with its own `status`
+(`ok | degraded | down`, uniform semantics: `degraded` = behind, `down` =
+erroring). The top-level `status` is the **worse of the two** (HTTP `503` unless
+`ok`, so a load balancer drains a stale *or* broken replica). Collapsing them into
+one number would mislead.
 
 - **Indexing lag** (`indexing`): how far the *event* stream trails the chain.
   `indexedBlock` vs `chainHead` → `blocksBehind`; and `secondsBehind` = wall-clock
   since the last indexed block's timestamp (from Ponder's own `/status`).
-  `indexing.healthy` is false once `secondsBehind > maxLagSeconds`, so a load
-  balancer can drain a stale replica.
+  `degraded` once `secondsBehind > maxLagSeconds`; `down` if the chain is
+  unreachable (can't verify freshness).
 - **Decryption backlog** (`decryptable`): the *actionable* work — rows we are
   **entitled** to decrypt (a party has an active delegation) but **haven't yet**.
   This is deliberately **not** the raw state counts: rows with no delegation aren't
   our work (they'll never decrypt until the user opts in), and `decrypted` rows are
   done. We split it into `inFlight` (`pending_rights` / `pending_propagation` —
   being worked) and `failed` (exhausted the retry grace; see `escalateState`).
-  **`decryptable.healthy` keys on `failed === 0`, not on age** — because a
-  legitimate history backfill (a user delegating for week-old transfers)
-  transiently has very old `oldestBlock`s while draining in seconds, so age would
-  false-positive. `failed` only appears after `MAX_PROPAGATION_ATTEMPTS` of *real*
-  failure (~minutes), so it's the honest "decryption is stuck" signal.
+  `down` keys on **`failed > 0`**; `degraded` on oldest in-flight age >
+  `MAX_DECRYPT_LAG_SECONDS` (generous, default 600s). Health keys on `failed`, not
+  tightly on age, because a legitimate history backfill (a user delegating for
+  week-old transfers) transiently has very old `oldestBlock`s while draining in
+  seconds, so a tight age check would false-positive. `failed` only appears after
+  `MAX_PROPAGATION_ATTEMPTS` of *real* failure, so it's the honest "stuck" signal.
   `oldestAgeSeconds` is kept as consumer-facing staleness, not a health trigger.
 
 **At scale** this is exactly where the two-queue design pays off: `decryptable`
