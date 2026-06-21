@@ -29,8 +29,10 @@ import { confidentialTokenAbi } from "../src/abis/confidentialToken";
 const HOLDER = accounts.indexerHolder.address;
 const TOKEN = env.TOKEN_ADDRESS!;
 const UNDERLYING = env.UNDERLYING_USD_ADDRESS!;
-const SUBJECT_SHIELD = "50"; // whole cUSD a fresh subject wraps, so it has pending history
-const SUBJECT_GAS_ETH = "0.012"; // enough for mint + approve + wrap (+ a later on-camera delegate)
+// Whole cUSD a fresh subject wraps — several shields so it has *multiple* pending
+// rows that all flip to decrypted when it delegates on camera (more dramatic than one).
+const SUBJECT_SHIELDS = ["50", "30", "20"];
+const SUBJECT_GAS_ETH = "0.03"; // enough for 3× (mint+approve+wrap) + a later on-camera delegate
 const MAX_SUBJECTS = 16; // how far past the test users we'll look for a fresh subject
 
 /** Current EIP-1559 fee overrides with headroom for Sepolia volatility. */
@@ -111,14 +113,16 @@ async function provisionSubject(): Promise<Address> {
     if (await isDelegated(subject.address)) continue; // used by a prior demo — skip
     console.log(`\nNon-delegated subject: ${subject.address}`);
     if (await hasShield(subject.address)) {
-      console.log("  already has a shield ✓");
+      console.log("  already has shields ✓ (run `npm run subject:topup` to add more)");
     } else {
-      const amount = parseUnits(SUBJECT_SHIELD, 6);
       await ensureGas(subject.address, SUBJECT_GAS_ETH);
-      await send(subject, UNDERLYING, loadAbi("ToyUSD"), "mint", [subject.address, amount]);
-      await send(subject, UNDERLYING, loadAbi("ToyUSD"), "approve", [TOKEN, amount]);
-      await send(subject, TOKEN, loadAbi("ConfidentialUSD"), "wrap", [subject.address, amount], 900_000n);
-      console.log(`  minted + shielded ${SUBJECT_SHIELD} cUSD (pending, never delegated)`);
+      for (const whole of SUBJECT_SHIELDS) {
+        const amount = parseUnits(whole, 6);
+        await send(subject, UNDERLYING, loadAbi("ToyUSD"), "mint", [subject.address, amount]);
+        await send(subject, UNDERLYING, loadAbi("ToyUSD"), "approve", [TOKEN, amount]);
+        await send(subject, TOKEN, loadAbi("ConfidentialUSD"), "wrap", [subject.address, amount], 900_000n);
+        console.log(`  shielded ${whole} cUSD (pending, never delegated)`);
+      }
     }
     return subject.address;
   }
