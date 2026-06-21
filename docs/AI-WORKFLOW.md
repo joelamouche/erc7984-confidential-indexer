@@ -120,6 +120,14 @@ closed it.
   `via`, a non-narrowed nullable handle).
 - *"Feedback on DECISIONS.md"* → it folded my corrections back in, including
   reframing the auth section from "defensible" to "a known hole I'm postponing."
+- *"Prepare for demo" / "how far behind"* → designing the health endpoint, it
+  pushed back on my own assumptions twice: it noted that firing huge transfer
+  volumes would be the *wrong* way to test decryption-lag (volume drains
+  successfully, so it never trips the health flag), and — when I doubted the
+  "~1–2 min" propagation figure I'd been quoting from the SDK docs — it wrote a
+  one-second-poll probe and **measured the real number: ~4 seconds.** That single
+  measurement reshaped the retry design and the demo pacing. Exactly the
+  "verify against reality" instinct I most wanted from it.
 
 ## What I take from it
 
