@@ -62,6 +62,8 @@ async function main() {
         args: [user.address, user.address, encryptedValues[0], inputProof],
         account: user.account,
         chain,
+        // Explicit gas so viem skips the flaky eth_estimateGas simulation (see transfer.ts).
+        gas: 1_200_000n,
         maxPriorityFeePerGas,
         maxFeePerGas: (block.baseFeePerGas ?? parseGwei("1")) * 3n + maxPriorityFeePerGas,
       });

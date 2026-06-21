@@ -65,12 +65,13 @@ async function hasShield(addr: Address): Promise<boolean> {
 /** Send a write from `account` and wait for the receipt; retry transient reverts.
  * FHE writes (e.g. `wrap`) occasionally revert with a transient coprocessor error
  * (ZamaProtocolUnsupported) on Sepolia — a retry clears it, so the reset is reliable. */
-async function send(account: HDAccount, address: Address, abi: ReturnType<typeof loadAbi>, fn: string, args: unknown[]) {
+async function send(account: HDAccount, address: Address, abi: ReturnType<typeof loadAbi>, fn: string, args: unknown[], gas?: bigint) {
   const wallet = createWalletClient({ account, chain, transport: http(env.SEPOLIA_RPC_URL) });
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const hash = await wallet.writeContract({ address, abi, functionName: fn, args, account, chain, ...(await fees()) });
+      // Explicit gas for FHE ops (`wrap`) so viem skips the flaky eth_estimateGas simulation (see transfer.ts).
+      const hash = await wallet.writeContract({ address, abi, functionName: fn, args, account, chain, ...(await fees()), ...(gas ? { gas } : {}) });
       await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
       return hash;
     } catch (err) {
@@ -116,7 +117,7 @@ async function provisionSubject(): Promise<Address> {
       await ensureGas(subject.address, SUBJECT_GAS_ETH);
       await send(subject, UNDERLYING, loadAbi("ToyUSD"), "mint", [subject.address, amount]);
       await send(subject, UNDERLYING, loadAbi("ToyUSD"), "approve", [TOKEN, amount]);
-      await send(subject, TOKEN, loadAbi("ConfidentialUSD"), "wrap", [subject.address, amount]);
+      await send(subject, TOKEN, loadAbi("ConfidentialUSD"), "wrap", [subject.address, amount], 900_000n);
       console.log(`  minted + shielded ${SUBJECT_SHIELD} cUSD (pending, never delegated)`);
     }
     return subject.address;

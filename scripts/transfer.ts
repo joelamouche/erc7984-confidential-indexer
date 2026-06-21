@@ -64,6 +64,12 @@ async function main() {
         args: [recipient.address, encryptedValues[0], inputProof],
         account: sender.account,
         chain,
+        // Explicit gas so viem skips eth_estimateGas — the estimation (eth_call
+        // simulation) intermittently reverts on Sepolia because the just-registered
+        // FHE input isn't yet visible to the simulating node. A real transfer uses
+        // ~440k; 1M is generous headroom. This is the actual fix for the "unknown
+        // reason" reverts, not the retry below (which stays as a backstop).
+        gas: 1_000_000n,
         maxPriorityFeePerGas,
         maxFeePerGas: (block.baseFeePerGas ?? parseGwei("1")) * 3n + maxPriorityFeePerGas,
       });

@@ -52,11 +52,14 @@ async function write(
   functionName: string,
   args: unknown[],
   feeOverrides: Awaited<ReturnType<typeof fees>>,
+  // Explicit gas for FHE ops (`wrap`) so viem skips the flaky eth_estimateGas
+  // simulation (see transfer.ts); omitted for cheap ERC20 calls that estimate fine.
+  gas?: bigint,
 ): Promise<Hex> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const hash = await walletFor(role).writeContract({ address, abi, functionName, args, account: role.account, chain, ...feeOverrides });
+      const hash = await walletFor(role).writeContract({ address, abi, functionName, args, account: role.account, chain, ...feeOverrides, ...(gas ? { gas } : {}) });
       await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
       return hash;
     } catch (err) {
@@ -91,7 +94,7 @@ async function main() {
     console.log(`  mint ${mint} tUSD  ${m}`);
     const a = await write(user, TOY_USD, toyUsdAbi, "approve", [WRAPPER, wrapAmt], f);
     console.log(`  approve ${wrap}     ${a}`);
-    const w = await write(user, WRAPPER, wrapperAbi, "wrap", [user.address, wrapAmt], f);
+    const w = await write(user, WRAPPER, wrapperAbi, "wrap", [user.address, wrapAmt], f, 900_000n);
     console.log(`  wrap (shield) ${wrap} -> cUSD  ${w}`);
   }
 
