@@ -47,6 +47,17 @@ export const aclAbi = [
     ],
     outputs: [],
   },
+  // The user signs this to revoke the holder's decrypt rights (used to reset the demo).
+  {
+    type: "function",
+    name: "revokeDelegationForUserDecryption",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "delegate", type: "address" },
+      { name: "contractAddress", type: "address" },
+    ],
+    outputs: [],
+  },
   // Read current delegation expiry (0 = none/revoked).
   {
     type: "function",

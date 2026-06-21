@@ -245,3 +245,42 @@ npm test                                       # unit + (if the demo is live) in
 npm run lint                                   # no `any` allowed
 INTEGRATION_SLOW=true npm test -- transition   # gated full transition on Sepolia
 ```
+
+## Resetting between demos
+
+To re-run the "non-delegated user delegates → backfill decrypts" beat, the demo
+users need to start **un-delegated**:
+
+```bash
+npm run revoke          # revoke ALL test users' delegations on-chain (or: npm run revoke -- 0)
+```
+
+⚠️ **Two non-obvious caveats** (learned the hard way — see DECISIONS, indexer
+limitations):
+
+1. **`rm -rf .ponder` triggers a *slow* re-sync.** A fresh DB replays the whole
+   on-chain history, and the block-interval backfill re-runs across all of it
+   (re-attempting decryption block-by-block). For a multi-day-old deployment that's
+   **several minutes to ~30 min**, not the "1–2 min" you'd hope. Start the indexer
+   well before recording, or don't clear the DB at all (see below).
+
+2. **A cleared + re-synced DB does *not* land in a clean "all pending" state.**
+   During replay the indexer sees the *old* `DelegatedForUserDecryption` events and
+   tries to decrypt — but the **gateway checks *current* on-chain state**, where the
+   user is now revoked, so those attempts **fail** and the rows show
+   `decryptionState: failed`, not a tidy `pending_rights`. (This is itself a correct,
+   honest outcome — the API never fabricates — but it's noisy for a demo.)
+
+**Recommended reset (clean + fast):** keep a DB that's already synced to head and
+demo with **fresh activity** instead of a pristine re-sync:
+
+```bash
+# indexer already running and at head (users revoked, so their history shows pending/failed)
+npm run transfer -- 0 1 5     # a NEW confidential transfer → indexed as pending (user0 revoked)
+npm run delegate -- 0         # user0 delegates on camera → the new transfer decrypts live
+```
+
+This shows the exact money-shot (pending → delegate → decrypted) without the slow,
+noisy re-sync. The "re-decrypts history on a fresh sync" cost is a real
+single-process limitation; the worker-fleet design (DECISIONS / INDEXER §6) is where
+a production reset would be clean.

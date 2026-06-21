@@ -24,7 +24,8 @@
     "decrypt:check": "tsx scripts/decrypt-check.ts",
     "transfer": "tsx scripts/transfer.ts",
     "unshield": "tsx scripts/unshield.ts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "revoke": "tsx scripts/revoke.ts"
   },
   "dependencies": {
     "@zama-fhe/sdk": "3.1.0-alpha.15",
