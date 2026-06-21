@@ -9,7 +9,7 @@
  * transfers (which need SDK-encrypted inputs) and a delegation step are layered
  * in later.
  */
-import { createWalletClient, http, parseGwei, parseUnits, type Address, type Hex } from "viem";
+import { createWalletClient, http, parseGwei, parseUnits, zeroHash, type Address, type Hex } from "viem";
 import { accounts, env, type RoleAccount } from "../src/config";
 import { chain, publicClient } from "../src/chain";
 import { loadAbi } from "../src/artifacts";
@@ -42,7 +42,9 @@ function walletFor(role: RoleAccount) {
   return createWalletClient({ account: role.account, chain, transport: http(env.SEPOLIA_RPC_URL) });
 }
 
-/** Send a contract write from a role and wait for its receipt. */
+/** Send a contract write from a role and wait for its receipt; retry transient reverts.
+ * FHE writes (`wrap`) intermittently revert with a transient coprocessor error
+ * (ZamaProtocolUnsupported) on Sepolia — a retry clears it, so the seed is reliable. */
 async function write(
   role: RoleAccount,
   address: Address,
@@ -51,17 +53,24 @@ async function write(
   args: unknown[],
   feeOverrides: Awaited<ReturnType<typeof fees>>,
 ): Promise<Hex> {
-  const hash = await walletFor(role).writeContract({
-    address,
-    abi,
-    functionName,
-    args,
-    account: role.account,
-    chain,
-    ...feeOverrides,
-  });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
-  return hash;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const hash = await walletFor(role).writeContract({ address, abi, functionName, args, account: role.account, chain, ...feeOverrides });
+      await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
+      return hash;
+    } catch (err) {
+      lastError = err;
+      console.log(`  ${functionName} attempt ${attempt}/3 failed (transient?), retrying…`);
+    }
+  }
+  throw lastError;
+}
+
+/** Already holds a confidential balance (a prior shield)? Lets the seed be idempotent. */
+async function hasShield(addr: Address): Promise<boolean> {
+  const handle = await publicClient.readContract({ address: WRAPPER, abi: wrapperAbi, functionName: "confidentialBalanceOf", args: [addr] });
+  return handle !== zeroHash;
 }
 
 /** Mint ToyUSD to each test user and wrap (shield) a chunk into confidential cUSD. */
@@ -70,10 +79,14 @@ async function main() {
   const dec = 6;
 
   for (const { user, mint, wrap } of PLAN) {
+    console.log(`\n${user.role} (${user.address})`);
+    if (await hasShield(user.address)) {
+      console.log(`  already shielded ✓ (skipping)`);
+      continue;
+    }
     const mintAmt = parseUnits(mint, dec);
     const wrapAmt = parseUnits(wrap, dec);
 
-    console.log(`\n${user.role} (${user.address})`);
     const m = await write(accounts.deployer, TOY_USD, toyUsdAbi, "mint", [user.address, mintAmt], f);
     console.log(`  mint ${mint} tUSD  ${m}`);
     const a = await write(user, TOY_USD, toyUsdAbi, "approve", [WRAPPER, wrapAmt], f);
