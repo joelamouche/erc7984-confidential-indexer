@@ -81,19 +81,29 @@ faster free endpoint (drpc, ~23 req/s) and switch the default. None of this was
 predictable from docs; it came from watching real failures and fixing the actual
 cause.
 
-## 6. The one subtly-wrong thing I had to correct
+## 6. Where it was wrong — two different kinds
 
-The honest answer the brief asks for: early on, from memory, it framed the whole
-integration in the **legacy `@zama-fhe/relayer-sdk`** API —
-`createInstance(SepoliaConfig)` / `createEncryptedInput` / `userDecrypt` / manual
-keypair + EIP-712 — which is precisely the pre-3.x surface the new `ZamaSDK` class
-replaces. It *looked* authoritative. If I'd trusted it, I'd have built against an
-API that doesn't exist in this package. It also assumed a vanilla ERC-20
-`Transfer(address,address,uint256)`; ERC-7984 actually emits
-`ConfidentialTransfer(from, to, euint64 indexed amount)` with the amount as an
-encrypted handle in a log topic. Both were caught by the §1 rule — forcing a
-source-grounded pass before writing code — and both corrections are recorded in
-`DECISIONS.md` (AI assistance).
+**Wrong-from-memory, caught by the process (not by me noticing).** Early on, from
+memory, it framed the integration in the **legacy `@zama-fhe/relayer-sdk`** API —
+`createInstance(SepoliaConfig)` / `createEncryptedInput` / `userDecrypt` — the
+pre-3.x surface the new `ZamaSDK` replaces, plus a vanilla ERC-20 `Transfer` event
+instead of ERC-7984's `ConfidentialTransfer(from, to, euint64 indexed amount)`. It
+*looked* authoritative. This is the class of error the §1 grounding rule exists to
+catch — and did, before any code was written. Credit to the *process*, not to a
+human spotting it.
+
+**Wrong-but-plausible, caught by me distrusting it.** The more instructive one,
+because no grounding pass would have flagged it: it confidently quoted "~1–2 min"
+for delegation propagation — straight from the SDK docs — and built that figure
+into the retry windows and demo pacing. I didn't believe a number that round and
+told it to *measure* (delegate a fresh user, poll the decrypt every 1s). Reality
+was **~4 seconds**, off by ~30×, which reshaped the retry/escalation logic and the
+demo. Same pattern with the health endpoint: it first shipped a one-dimensional
+`status` (then a version where the two axes meant different things), and I sent it
+back until it was a uniform two-axis model. The agent is fast and tireless at
+legwork and *plausible* almost always; the judgement about **where the plausible
+answer is wrong and worth verifying** is the part that stayed human. (Both kinds
+are recorded in `DECISIONS.md` — AI assistance.)
 
 ## 7. Tests after the system existed — and being honest about coverage
 

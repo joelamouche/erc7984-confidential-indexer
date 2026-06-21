@@ -194,29 +194,38 @@ via a small DI refactor; (5) light observability + CI.
 
 ## SDK feedback (concrete, design-review-shaped)
 
-Three findings from actually wiring decryption in, in priority order:
+Three findings from actually wiring decryption in, by impact — each **verified
+against the installed source**. Full root-cause analysis, the fix-difficulty
+breakdown, and an **AI-native-SDK** section are in
+**[docs/SDK-FEEDBACK.md](docs/SDK-FEEDBACK.md)**.
 
-1. **`node()` can't run under a bundler's SSR runtime (highest).** Its worker
-   bootstrap uses `import.meta.resolve`, which Vite/esbuild SSR turns into an
-   undefined shim → `__vite_ssr_import_meta__.resolve is not a function`. Opaque,
-   and it cost the most time (works in plain Node, so it looks like gremlins).
-   **(a)** resolve the worker via `new URL('./worker.js', import.meta.url)` + a CJS
-   fallback, or a `workerPath` option — at minimum throw a *named* "run outside SSR"
-   error. **(b)** unblocks decryption inside **Ponder / Next.js routes / Remix
-   loaders** — the backends partners actually run; I had to shell out to a
-   subprocess. **(c)** #1, a hard blocker for the most common surface.
-2. **RPC rate-limits masquerade as `DECRYPTION_FAILED`.** A 429 during the SDK's
-   internal `eth_call` surfaces as `DECRYPTION_FAILED` wrapping ethers `BAD_DATA`.
-   **(a)** detect 429/`-32005` → a typed `RpcRateLimitedError`. **(b)** unblocks
-   every free-tier-RPC partner (cost me an hour before I split the RPC); also
-   document that decryption is *RPC-heavy*. **(c)** #2 — a guaranteed time-sink with
-   a misleading error.
-3. **Duplicate decrypt names + the legacy shadow.** `sdk.decryption` exposes both
-   `userDecrypt` *and* `decryptValues`, and the package wraps the legacy
-   `relayer-sdk` whose `createInstance`/`userDecrypt` shape is what every doc + LLM
-   still shows. **(a)** pick one name, deprecate the other; ship a "migrating from
-   relayer-sdk" page. **(b)** faster onboarding. **(c)** #3 — a papercut that taxes
-   every new integrator.
+1. **`node()` can't run under a bundler's SSR transform (highest).** `createWorker`
+   uses `import.meta.resolve("@zama-fhe/sdk/node")`, which Vite/esbuild SSR replaces
+   with a shim lacking `.resolve` → `__vite_ssr_import_meta__.resolve is not a
+   function`. Works in plain Node, so it reads as gremlins; the `./node` subpath is
+   also ESM-only, so you can't dodge via CJS. Their reasons are sound (worker_threads
+   for CPU-bound FHE; `import.meta.resolve` is spec-correct for pure Node) — the flaw
+   is that it assumes a non-bundler runtime, breaking the backends partners actually
+   use (Ponder / Next.js / Remix). **(a)** switch to `new Worker(new URL('./worker.js',
+   import.meta.url))` (works under SSR *and* is the bundler-native worker pattern) +
+   a `workerUrl` option + a *named* error; **(b)** unblocks in-process decryption
+   everywhere (I had to shell out to a subprocess); **(c)** #1 — a hard blocker. Fix
+   is genuinely easy; analysis in the linked doc.
+2. **Misleading errors.** An RPC 429 during the SDK's own `eth_call` surfaces as
+   `DECRYPTION_FAILED` (points you at the wrong fix), and `DelegationNotPropagatedError`
+   is — per the SDK's own docstring — a *heuristic* over a bare HTTP 500 that can
+   also be a real gateway error. **(a)** a typed `RpcRateLimitedError` + distinguish
+   propagation-lag from internal-error; **(b)** unblocks free-tier-RPC partners and
+   correct retry loops; **(c)** #2 — a guaranteed time-sink. (There's also no way to
+   *query* propagation status — you can only fail-and-retry; detail in the doc.)
+3. **Duplicate decrypt APIs + the legacy shadow.** `sdk.decryption` exposes a
+   lower-level pair (`userDecrypt` / `delegatedUserDecrypt`) *and* a convenience pair
+   (`decryptValues` / `delegatedDecryptValues`) with no "prefer this" signposting;
+   and the package wraps the legacy `relayer-sdk` whose `createInstance`/`userDecrypt`
+   shape is what every doc + LLM still emits. **(a)** one documented entrypoint +
+   `@deprecated` the rest + a migration map; **(b)** faster onboarding; **(c)** #3 —
+   a papercut that taxes every integrator (and every AI agent — see the AI-native
+   section in the linked doc).
 
 ## AI assistance
 
@@ -224,16 +233,27 @@ Built with **Claude Code** as a daily-driver. Full narrative:
 **[docs/AI-WORKFLOW.md](docs/AI-WORKFLOW.md)**. The short version:
 
 - **Process:** frame before code (analyse, surface ambiguities, push back — no code
-  on turn one); **ground the SDK against the prerelease branch + installed package,
-  not model memory** (the brief warns training data predates it); build outward-in,
-  verifying each layer on real Sepolia in small commits; iterate via GitHub issues
-  it claimed/answered/fixed.
-- **The subtly-wrong thing I caught:** from memory it first used the **legacy
-  `@zama-fhe/relayer-sdk`** shape (`createInstance` / `createEncryptedInput` /
-  `userDecrypt`) — the exact pre-3.x API the new `ZamaSDK` supersedes — and assumed a
-  plain ERC-20 `Transfer` event when ERC-7984 emits `ConfidentialTransfer(from, to,
-  euint64 indexed amount)` with an encrypted handle. Both would have sent me down a
-  wrong path; both were caught by forcing a source-grounded research pass before any
-  code (→ [docs/SDK-NOTES.md](docs/SDK-NOTES.md)). The lesson I leaned on after:
-  against a fast-moving alpha, make the tool *read the installed types*, never recall
-  them.
+  on turn one); build outward-in, verifying each layer on real Sepolia in small
+  commits; then **drive the work via GitHub issues I filed and the agent
+  claimed/answered/fixed** — which is where most of the real corrections happened
+  (below). A safeguard I imposed up front: **ground the SDK against the installed
+  package + prerelease branch, not model memory** — and it earned its keep, catching
+  the agent's *own* from-memory first draft, which used the legacy
+  `@zama-fhe/relayer-sdk` shape (`createInstance`/`userDecrypt`) and a plain ERC-20
+  `Transfer` event instead of ERC-7984's `ConfidentialTransfer(from, to, euint64
+  indexed amount)`. The lesson, applied throughout: against a fast-moving alpha,
+  make the tool *read the installed types*, never recall them.
+
+- **The subtly-wrong thing *I* had to correct.** The most impactful catch was mine,
+  not the agent's. It had been confidently quoting "~1–2 min" for delegation
+  propagation — lifted straight from the SDK docs — and had baked that figure into
+  the retry windows and the demo pacing. I didn't believe it, and asked it to
+  *measure* (delegate a fresh user, poll the decrypt every 1s). Reality was **~4
+  seconds** — off by ~30×. That one correction reshaped the retry/escalation design
+  and the demo, and is now documented as a doc gap in the SDK feedback. The pattern
+  recurred: the agent produced plausible, doc-consistent output, and my job was to
+  distrust it where it mattered and force verification against reality — e.g. it
+  first shipped a one-dimensional `/v1/health` `status` (and a version where the two
+  axes meant different things), which I sent back until it was a uniform two-axis
+  model. The agent is fast and tireless at the legwork; the judgement about *what to
+  verify and where the plausible answer is wrong* stayed with me.

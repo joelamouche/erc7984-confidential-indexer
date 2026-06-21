@@ -100,6 +100,7 @@ scale: **[docs/INDEXER.md](docs/INDEXER.md)**.
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | full design: events, state machine, API shapes, data model |
 | [docs/INDEXER.md](docs/INDEXER.md) | how Ponder is wired, decryption backfill, designing for scale |
 | [docs/SDK-NOTES.md](docs/SDK-NOTES.md) | grounded `@zama-fhe/sdk` alpha reference (training data predates it) |
+| [docs/SDK-FEEDBACK.md](docs/SDK-FEEDBACK.md) | detailed SDK feedback: root causes, fix analysis, AI-native-SDK |
 | [docs/DEMO.md](docs/DEMO.md) | terminal-by-terminal demo runbook |
 | [docs/AI-WORKFLOW.md](docs/AI-WORKFLOW.md) | how this was built with Claude Code |
 | [docs/CHALLENGE.md](docs/CHALLENGE.md) | the brief, verbatim |
