@@ -24,6 +24,14 @@ function jsonable<T>(row: T): T {
   return JSON.parse(JSON.stringify(row, (_k, v) => (typeof v === "bigint" ? v.toString() : v)));
 }
 
+// Uniform health vocabulary (cf. IETF health-check draft pass/warn/fail):
+// ok = current + error-free, degraded = behind but functioning, down = erroring.
+type HealthStatus = "ok" | "degraded" | "down";
+const HEALTH_RANK: Record<HealthStatus, number> = { ok: 0, degraded: 1, down: 2 };
+function worst(a: HealthStatus, b: HealthStatus): HealthStatus {
+  return HEALTH_RANK[a] >= HEALTH_RANK[b] ? a : b;
+}
+
 class ApiError extends Error {
   constructor(public status: 400 | 404 | 422 | 503, public code: string, msg: string) {
     super(msg);
@@ -282,22 +290,42 @@ app.get("/v1/health", async (c) => {
     }
   }
 
-  // Two independent health axes; overall status is the worse of the two.
-  const indexingHealthy = secondsBehind === null || secondsBehind <= env.MAX_LAG_SECONDS;
-  const decryptionHealthy = failed === 0;
-  const status = indexingHealthy && decryptionHealthy ? "ok" : "degraded";
+  // Uniform 3-state per axis: `down` = erroring/can't function, `degraded` =
+  // functioning but behind, `ok` = current + error-free. Same semantics on both
+  // axes (the inconsistency before was indexing meaning "lag" and decryption
+  // meaning "errors"). Overall status is the worst of the two.
+  const indexingStatus: HealthStatus =
+    chainHead === null // can't reach the chain to verify freshness
+      ? "down"
+      : secondsBehind !== null && secondsBehind > env.MAX_LAG_SECONDS
+        ? "degraded"
+        : "ok";
+  const decryptionStatus: HealthStatus =
+    failed > 0 // entitled rows that exhausted the retry grace = real failures
+      ? "down"
+      : oldestAgeSeconds !== null && oldestAgeSeconds > env.MAX_DECRYPT_LAG_SECONDS
+        ? "degraded"
+        : "ok";
+  const status = worst(indexingStatus, decryptionStatus);
   return c.json(
     {
       status,
       indexing: {
-        healthy: indexingHealthy,
+        status: indexingStatus,
         indexedBlock,
         chainHead,
         blocksBehind,
         secondsBehind,
         maxLagSeconds: env.MAX_LAG_SECONDS,
       },
-      decryptable: { healthy: decryptionHealthy, inFlight, failed, oldestBlock, oldestAgeSeconds },
+      decryptable: {
+        status: decryptionStatus,
+        inFlight,
+        failed,
+        oldestBlock,
+        oldestAgeSeconds,
+        maxLagSeconds: env.MAX_DECRYPT_LAG_SECONDS,
+      },
     },
     status === "ok" ? 200 : 503,
   );

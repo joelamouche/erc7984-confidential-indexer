@@ -64,6 +64,10 @@ const EnvSchema = z.object({
   // API
   PORT: z.coerce.number().int().positive().default(42069),
   MAX_LAG_SECONDS: z.coerce.number().int().positive().default(120),
+  // Decryption-lag threshold for /v1/health `degraded`. Generous on purpose: a
+  // legit history backfill transiently shows old block ages while draining in
+  // ~seconds, so a tight value would false-positive. Default 10 min.
+  MAX_DECRYPT_LAG_SECONDS: z.coerce.number().int().positive().default(600),
 });
 
 function parseEnv() {
