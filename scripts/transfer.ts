@@ -42,29 +42,41 @@ async function main() {
   );
 
   console.log(`\n${sender.role} (${sender.address}) -> ${recipient.role} (${recipient.address})`);
-  console.log(`encrypting ${process.argv[4] ?? "40"} cUSD…`);
-  const { encryptedValues, inputProof } = await sdk.encrypt({
-    values: [{ value: amount, type: "euint64" }],
-    contractAddress: token,
-    userAddress: sender.address,
-  });
 
-  // Send the confidential transfer via the indexing RPC.
-  const block = await publicClient.getBlock();
-  const maxPriorityFeePerGas = parseGwei("2");
-  const hash = await createWalletClient({ account: sender.account, chain, transport: http(env.SEPOLIA_RPC_URL) }).writeContract({
-    address: token,
-    abi: loadAbi("ConfidentialUSD"),
-    functionName: "confidentialTransfer",
-    args: [recipient.address, encryptedValues[0], inputProof],
-    account: sender.account,
-    chain,
-    maxPriorityFeePerGas,
-    maxFeePerGas: (block.baseFeePerGas ?? parseGwei("1")) * 3n + maxPriorityFeePerGas,
-  });
-  console.log(`confidentialTransfer tx: ${hash}`);
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
-  console.log(`\n✅ Transferred. Watch the running indexer pick it up live as kind=transfer.`);
+  // Encrypt + send, retrying transient coprocessor reverts (ZamaProtocolUnsupported).
+  // We re-encrypt on each attempt because a rejected input proof must not be reused.
+  const wallet = createWalletClient({ account: sender.account, chain, transport: http(env.SEPOLIA_RPC_URL) });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      console.log(`encrypting ${process.argv[4] ?? "40"} cUSD…${attempt > 1 ? ` (attempt ${attempt}/3)` : ""}`);
+      const { encryptedValues, inputProof } = await sdk.encrypt({
+        values: [{ value: amount, type: "euint64" }],
+        contractAddress: token,
+        userAddress: sender.address,
+      });
+      const block = await publicClient.getBlock();
+      const maxPriorityFeePerGas = parseGwei("2");
+      const hash = await wallet.writeContract({
+        address: token,
+        abi: loadAbi("ConfidentialUSD"),
+        functionName: "confidentialTransfer",
+        args: [recipient.address, encryptedValues[0], inputProof],
+        account: sender.account,
+        chain,
+        maxPriorityFeePerGas,
+        maxFeePerGas: (block.baseFeePerGas ?? parseGwei("1")) * 3n + maxPriorityFeePerGas,
+      });
+      console.log(`confidentialTransfer tx: ${hash}`);
+      await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
+      console.log(`\n✅ Transferred. Watch the running indexer pick it up live as kind=transfer.`);
+      return;
+    } catch (err) {
+      lastError = err;
+      console.log(`  transfer attempt ${attempt}/3 reverted (transient coprocessor error?), retrying…`);
+    }
+  }
+  throw lastError;
 }
 
 main()

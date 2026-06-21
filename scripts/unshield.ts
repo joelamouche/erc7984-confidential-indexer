@@ -41,28 +41,41 @@ async function main() {
   );
 
   console.log(`\n${user.role} (${user.address}) unwrapping ${process.argv[3] ?? "20"} cUSD → ToyUSD…`);
-  const { encryptedValues, inputProof } = await sdk.encrypt({
-    values: [{ value: amount, type: "euint64" }],
-    contractAddress: token,
-    userAddress: user.address,
-  });
 
-  const block = await publicClient.getBlock();
-  const maxPriorityFeePerGas = parseGwei("2");
-  const hash = await createWalletClient({ account: user.account, chain, transport: http(env.SEPOLIA_RPC_URL) }).writeContract({
-    address: token,
-    abi: loadAbi("ConfidentialUSD"),
-    functionName: "unwrap",
-    args: [user.address, user.address, encryptedValues[0], inputProof],
-    account: user.account,
-    chain,
-    maxPriorityFeePerGas,
-    maxFeePerGas: (block.baseFeePerGas ?? parseGwei("1")) * 3n + maxPriorityFeePerGas,
-  });
-  console.log(`unwrap tx: ${hash}`);
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
-  console.log(`\n✅ Unshield burn sent. Indexer records kind=unshield; decrypts via delegation if entitled.`);
-  console.log(`   The gateway will finalize the unwrap (UnwrapFinalized) shortly with the cleartext amount.`);
+  // Encrypt + send, retrying transient coprocessor reverts (ZamaProtocolUnsupported).
+  // Re-encrypt each attempt because a rejected input proof must not be reused.
+  const wallet = createWalletClient({ account: user.account, chain, transport: http(env.SEPOLIA_RPC_URL) });
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { encryptedValues, inputProof } = await sdk.encrypt({
+        values: [{ value: amount, type: "euint64" }],
+        contractAddress: token,
+        userAddress: user.address,
+      });
+      const block = await publicClient.getBlock();
+      const maxPriorityFeePerGas = parseGwei("2");
+      const hash = await wallet.writeContract({
+        address: token,
+        abi: loadAbi("ConfidentialUSD"),
+        functionName: "unwrap",
+        args: [user.address, user.address, encryptedValues[0], inputProof],
+        account: user.account,
+        chain,
+        maxPriorityFeePerGas,
+        maxFeePerGas: (block.baseFeePerGas ?? parseGwei("1")) * 3n + maxPriorityFeePerGas,
+      });
+      console.log(`unwrap tx: ${hash}`);
+      await publicClient.waitForTransactionReceipt({ hash, timeout: 240_000, pollingInterval: 4_000 });
+      console.log(`\n✅ Unshield burn sent. Indexer records kind=unshield; decrypts via delegation if entitled.`);
+      console.log(`   The gateway will finalize the unwrap (UnwrapFinalized) shortly with the cleartext amount.`);
+      return;
+    } catch (err) {
+      lastError = err;
+      console.log(`  unwrap attempt ${attempt}/3 reverted (transient coprocessor error?), retrying…`);
+    }
+  }
+  throw lastError;
 }
 
 main()
