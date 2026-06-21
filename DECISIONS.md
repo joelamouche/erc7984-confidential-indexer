@@ -166,31 +166,75 @@ ownership ∩ decrypt-rights. Those auth tables are off-chain, not Ponder-manage
 
 ## Least-confident component under partner load
 
-The **backfill decryption tick.** The indexer is cheap and Ponder carries it;
-decryption is the scarce, network-bound, rate-limited resource. If a partner's
-transfer volume outruns decrypt throughput, the backlog grows and `/v1/health`'s
-`decryptable` shows it rising — that's what breaks first, and it's a *gateway*
-limit, not a Ponder one. I'd prove it with a load probe: K transfers/min, watch
-backlog depth and decrypt latency, find the rate where the backlog stops draining —
-that's the single-process ceiling. Mitigations + the Postgres/worker-fleet scale-out
-are in [INDEXER §6](docs/INDEXER.md); this is exactly why decryption is decoupled
-(§5).
+The **backfill decryption tick** — but the precise way it breaks is worth getting
+right, because it's *not* the gateway.
+
+In the current design the backfill self-throttles: it drains `BATCH` (25) rows per
+table per tick, and a tick fires every ~24s (the block interval), so it processes
+~1 row/s and makes only ~1 *batched* gateway call per tick. **The gateway is barely
+touched — it is nowhere near its limit.** So under a sustained inflow above ~1
+row/s, what breaks first is **our own queue**: the `pending_decrypt` backlog grows
+unbounded, and `/v1/health.decryptable` (`inFlight` count + `oldestAgeSeconds`)
+climbs — the freshness the partner sees degrades, fast, while the gateway sits idle.
+That's the first failure, and it's a *self-imposed throughput cap*, not a gateway
+or Ponder limit.
+
+The gateway only becomes the bottleneck **if we lift that cap** — bigger `BATCH`,
+shorter interval, parallel batches. Then we'd start hitting the relayer's rate
+limit and latency, which is the *real* ceiling and exactly what the two-queue
+worker-fleet design (below, [INDEXER §6](docs/INDEXER.md)) exists to manage.
+
+**How I'd prove both numbers:** (1) load-probe at rising tx/min, watch
+`decryptable.inFlight` + `oldestAgeSeconds`; the inflow where the backlog stops
+draining ≈ `BATCH ÷ interval` (~1/s) is the self-imposed ceiling. (2) Then raise
+`BATCH`/parallelism and find where the gateway starts 429-ing / latency spikes —
+that second number is the gateway ceiling, and the gap between them is the headroom
+the worker fleet unlocks.
+
+```
+NOW — single self-throttled loop (gateway under-used):
+  events ─▶ [pending_decrypt rows in DB] ──every ~24s──▶ tick: take ≤25 ─▶ ONE batched SDK decrypt ─▶ write cleartext
+                     ▲ grows unbounded once inflow > ~25 / 24s (~1/s);  /v1/health.decryptable surfaces it
+
+NEXT — two queues + worker pools (saturate the gateway safely):
+                              ┌─ live.decrypt   ─▶ live workers (autoscale)    ─┐  keep lag ≈ 0
+   new at-head events ──────▶ ┤                                                 ├─▶ Postgres ◀── read API
+   delegation indexed ─────▶ └─ backfill.decrypt ─▶ backfill workers (capped)  ─┘  drains a whale's
+   (a delegator's whole history = bulk)              delay OK; never starves live    backlog in the background
+                              shared gateway rate-limiter (token bucket); backfill yields to live
+```
 
 ## What I cut, and the next four hours
 
-**Cut (safely, for this exercise):** API auth (§8); a real decryption worker/queue
-(today it's a per-tick subprocess — works, doesn't scale); the unwrap/unshield path
-end-to-end (handlers exist + a delegated unshield is verified, but the gateway never
-*finalized* an unwrap for our contract, so the public-`UnwrapFinalized` cleartext
-path is coded-but-unproven, and the forge test is a stub); deeper API-layer tests;
-multi-token, websocket push, observability beyond `/health`, CI.
+**Cut (safely, for this exercise):**
 
-**Next four hours, in order:** (1) close the auth hole — the `X-API-Key` middleware
-(§8), highest security payoff; (2) promote decryption to a **RabbitMQ broker + two
-worker pools** (`live.decrypt` autoscaled vs `backfill.decrypt` capped, so a
-delegation storm can't starve realtime), writing to Postgres — [INDEXER §6](docs/INDEXER.md);
-(3) exercise + test unwrap/unshield (the one path with no live proof); (4) API tests
-via a small DI refactor; (5) light observability + CI.
+- **API auth** (§8) — scoped out by the brief, but a real gap.
+- **A real decryption worker / queue** — today it's a per-tick subprocess; works,
+  doesn't scale (the ceiling above).
+- **The unwrap/unshield path end-to-end** — handlers exist and a *delegated* unshield
+  is verified, but the gateway never *finalized* an unwrap for our contract, so the
+  public-`UnwrapFinalized` cleartext path is coded-but-unproven and the forge test
+  is a stub.
+- **Deeper API-layer tests**, multi-token, websocket push, observability beyond
+  `/health`, CI.
+
+**Next four hours, in order:**
+
+1. **Close the auth hole** — the `X-API-Key` middleware (§8). Highest security
+   payoff; the one cut I'm uncomfortable shipping.
+
+2. **Promote decryption to a RabbitMQ broker + two worker pools** — `live.decrypt`
+   (autoscaled, keep head fresh) vs `backfill.decrypt` (capped, drains a
+   newly-delegated whale's history without starving realtime), writing to Postgres.
+   [INDEXER §6](docs/INDEXER.md).
+
+3. **Exercise + test unwrap/unshield** — the one path with no live proof.
+
+4. **API tests via a small DI refactor** — pin pagination, the 404/422 taxonomy,
+   the delegation-quote calldata.
+
+5. **Light observability + CI** — decrypt-latency / backlog gauges and a GitHub
+   Action running typecheck + test + forge test.
 
 ## SDK feedback (concrete, design-review-shaped)
 
