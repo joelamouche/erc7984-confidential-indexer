@@ -1,179 +1,125 @@
 # Confidential Indexer — ERC-7984 → cleartext read API
 
-A small TypeScript Node service that watches a single **ERC-7984 confidential
-token** on Sepolia, **auto-decrypts transfer amounts** the indexer holder is
-entitled to (as a party to the transfer or via an ACL delegation) using the
-**`@zama-fhe/sdk`**, and exposes an **ERC-20-style read API** with cleartext
-balances and transfer history. A wallet partner can call it without learning FHE.
+A small TypeScript service that watches one **ERC-7984 confidential token** on
+Sepolia, **auto-decrypts transfer amounts** the indexer holder is entitled to (as
+a party, or via an ACL delegation) using **`@zama-fhe/sdk`**, and serves an
+**ERC-20-style read API** — cleartext balances and transfer history. A wallet
+partner calls it without learning FHE.
 
-Built for the Zama _Tech Lead, Product Integrations_ take-home. The full brief is
-in [`docs/CHALLENGE.md`](docs/CHALLENGE.md); the reasoning behind every choice is
-in [`DECISIONS.md`](DECISIONS.md).
+Built for Zama's _Tech Lead, Product Integrations_ take-home ([full brief](docs/CHALLENGE.md)).
 
-> **Status: in progress.** This repo is being built in small, reviewable commits.
-> The architecture and decisions are locked (see below); the indexer, API, and
-> tests land in subsequent commits. The run/test commands below describe the
-> intended fresh-clone path and will be live as the code is committed.
+### The interesting part — the seam
 
-## What it does
+The amount in a `ConfidentialTransfer` is an **encrypted handle**, and the indexer
+holds **one** decryption identity. So an amount isn't cleartext-or-nothing — it has
+a lifecycle the API surfaces honestly instead of hiding:
 
-- Indexes `ConfidentialTransfer`, `AmountDisclosed`, and wrapper
-  `UnwrapRequested` / `UnwrapFinalized` events for one ERC-7984 token (+ its
-  ERC-20 wrapper) using **Ponder**.
-- Decrypts each amount handle on index. Amounts the holder can't yet decrypt are
-  **kept in an explicit `pending_rights` / `pending_propagation` state, never
-  dropped**, and a **backfill worker** drains them once a partner grants
-  delegation.
-- Serves cleartext balances and transfer history over HTTP (Ponder's built-in
-  Hono server), with every amount-bearing row carrying its decryption state so
-  the partner sees the truth, not a clean lie.
+```
+indexed (pending_rights) ──user delegates──▶ pending_propagation ──gateway sync ~4s──▶ decrypted
+                                                                   └─repeated failure─▶ failed
+```
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design and
-[`docs/SDK-NOTES.md`](docs/SDK-NOTES.md) for the grounded `@zama-fhe/sdk` API
-reference (the brief warns LLM training data predates this package).
+Events the holder can't yet decrypt are **never dropped** — they're kept with an
+explicit `decryptionState`, and a backfill **decrypts them later** when a partner
+grants rights. The whole design defends this lifecycle: see **[DECISIONS.md](DECISIONS.md)**.
+
+## Quick start
+
+Requires Node ≥ 22. `.env.example` is pre-pointed at our **live Sepolia
+deployment**, so you can index real data in one step:
+
+```bash
+npm install
+cp .env.example .env          # set SEPOLIA_RPC_URL (any Sepolia endpoint); rest has working defaults
+npm run dev                   # indexes our deployed token + serves the API on :42069
+```
+
+```bash
+curl localhost:42069/v1/health                                              # how far behind + decrypt backlog
+curl localhost:42069/v1/tokens/$TOKEN_ADDRESS/balances/$ADDRESS             # cleartext balance (or honest pending)
+curl "localhost:42069/v1/tokens/$TOKEN_ADDRESS/addresses/$ADDRESS/transfers" # history, cleartext where available
+```
+
+> Cleartext for the live data was decrypted by **our** holder identity. With the
+> default mnemonic you'll see the events + honest `pending_rights` states; for the
+> cleartext payoff, **watch the video** or run the full demo with your own funded
+> mnemonic. The end-to-end demo (deploy → seed → delegate → transfer → unshield,
+> all on Sepolia) is scripted and narrated in **[docs/DEMO.md](docs/DEMO.md)**.
+
+## API
+
+| Endpoint | Returns |
+| --- | --- |
+| `GET /v1/tokens/:token/balances/:address` | cleartext balance + `decryptionState` |
+| `GET /v1/tokens/:token/addresses/:address/transfers?cursor=&limit=` | paginated history; cleartext where available |
+| `GET /v1/tokens/:token/delegations/:address` | has this address delegated to the holder? |
+| `POST /v1/tokens/:token/delegations/quote` | inputs/unsigned-tx for a user to grant the holder rights |
+| `GET /v1/health` | two-axis status: indexing lag + decryption backlog |
+
+Shapes, pagination, and error taxonomy: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
+## Tests
+
+```bash
+npm test                 # unit (always) + integration (skip unless the demo is live)
+npm run lint             # no `any` allowed
+npm run test:contracts   # forge-fhevm contract tests (from contracts/, after ./setup.sh)
+INTEGRATION_SLOW=true npm test -- transition   # gated: full pending→delegate→decrypted on Sepolia
+```
+
+Happy path (event → cleartext via the API) + a negative test (no-rights address →
+honest `pending`, never fabricated) + the gated transition test.
+
+## How it works (one screen)
+
+- **Ponder** indexes two contracts: the ERC-7984 token (+wrapper) for activity, and
+  the fhEVM **ACL** filtered to our holder — so delegations are discovered from
+  events, not guessed.
+- Indexing stays fast and deterministic; **decryption is decoupled** onto a
+  block-interval backfill (the SDK can't run inside Ponder's Vite SSR runtime — see
+  [INDEXER.md §5](docs/INDEXER.md)). Idempotent, keyed by the ciphertext handle.
+- The read API is Ponder's built-in **Hono** server; the DB is its embedded pglite.
+
+Full design: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** · indexer deep-dive +
+scale: **[docs/INDEXER.md](docs/INDEXER.md)**.
 
 ## Stack
 
 | Concern | Choice |
 | --- | --- |
-| Indexer + reorgs + backfill + DB + HTTP | [Ponder](https://ponder.sh) (pglite embedded store, Hono server) |
+| Indexer + reorgs + backfill + DB + HTTP | [Ponder](https://ponder.sh) (pglite + Hono) |
 | FHE decryption / delegation | [`@zama-fhe/sdk@alpha`](https://github.com/zama-ai/sdk) |
-| Token + wrapper | OpenZeppelin `openzeppelin-confidential-contracts`, deployed via Foundry / [forge-fhevm](https://github.com/zama-ai/forge-fhevm) |
-| Chain | Sepolia testnet |
-| Tests | Vitest (e2e) + forge-fhevm (contracts) |
+| Token + wrapper | OpenZeppelin confidential-contracts, deployed via [forge-fhevm](https://github.com/zama-ai/forge-fhevm) |
+| Chain | Sepolia |
 
-## Quick start
+## Docs
 
-> Requires Node ≥ 22 and (for the contracts) Foundry. Uses **EOA test keys and
-> toy values only** — never a real key.
+| Doc | What's in it |
+| --- | --- |
+| **[DECISIONS.md](DECISIONS.md)** | the trade-offs, reflections, SDK feedback, AI-assistance notes — start here |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | full design: events, state machine, API shapes, data model |
+| [docs/INDEXER.md](docs/INDEXER.md) | how Ponder is wired, decryption backfill, designing for scale |
+| [docs/SDK-NOTES.md](docs/SDK-NOTES.md) | grounded `@zama-fhe/sdk` alpha reference (training data predates it) |
+| [docs/DEMO.md](docs/DEMO.md) | terminal-by-terminal demo runbook |
+| [docs/AI-WORKFLOW.md](docs/AI-WORKFLOW.md) | how this was built with Claude Code |
+| [docs/CHALLENGE.md](docs/CHALLENGE.md) | the brief, verbatim |
 
-```bash
-git clone https://github.com/joelamouche/erc7984-confidential-indexer.git
-cd erc7984-confidential-indexer
-npm install
-cp .env.example .env        # set SEPOLIA_RPC_URL (indexing); MNEMONIC defaults to a test phrase
-( cd contracts && ./setup.sh )   # one-time: build the toy contracts (only needed to (re)deploy)
-```
-
-### End-to-end demo (fresh deploy → cleartext over the API)
-
-The full path the brief asks for, verified on Sepolia:
-
-```bash
-npm run accounts     # print the role addresses; fund the FUNDER (index 0) from a Sepolia faucet
-npm run fund         # funder fans gas out to deployer + indexer holder + test users
-npm run deploy       # deploy ToyUSD + ConfidentialUSD; writes TOKEN/WRAPPER/START_BLOCK into .env
-npm run seed         # users mint + wrap (shield) -> ConfidentialTransfer events
-npm run dev          # start indexer + API: shields show up as kind=shield, decryptionState=pending_rights
-
-# in another shell — a user grants the indexer decrypt rights, then it backfills cleartext:
-npm run delegate     # user0 delegates to the holder (ACL event). After ~4s gateway sync,
-                     # the backfill decrypts user0's amounts -> decryptionState=decrypted, amount=cleartext.
-                     # user1/user2 never delegate -> stay pending_rights (indexed, not dropped).
-
-# confidential transfers between users (SDK-encrypted) — sent while the indexer runs,
-# so you watch them get caught LIVE and decrypted-or-not by delegation:
-npm run transfer -- 0 1 40   # user0 (delegated) -> user1: amount comes out CLEARTEXT in BOTH
-                             #   histories — the amount handle is decryptable via user0's delegation,
-                             #   even though user1 never delegated.
-npm run transfer -- 1 2 30   # user1 -> user2: neither delegated -> stays pending_rights.
-
-# unshield (unwrap confidential -> ERC-20) — the burn is decrypted via delegation:
-npm run unshield -- 0 20     # user0 unwraps 20 cUSD; indexed as kind=unshield, cleartext via delegation.
-```
-
-> The transfer amount is ACL-allowed for **both** parties, so it decrypts if **either**
-> party delegated to the holder — `npm run transfer -- 0 1 40` shows up as cleartext in
-> user1's history despite user1 never delegating. Balances update too (user0: 100→60).
-
-### Run the indexer + API on their own
-
-```bash
-npm run dev        # starts Ponder: indexes from START_BLOCK and serves the read API on PORT
-```
-
-### Call the API
-
-```bash
-# how far behind is the indexer + decrypt backlog
-curl localhost:42069/v1/health
-
-# current cleartext balance for an address
-curl localhost:42069/v1/tokens/$TOKEN_ADDRESS/balances/$ADDRESS
-
-# transfer history with cleartext amounts where available
-curl "localhost:42069/v1/tokens/$TOKEN_ADDRESS/addresses/$ADDRESS/transfers?limit=20"
-
-# build the unsigned tx a user signs to grant the indexer decrypt rights
-curl -X POST localhost:42069/v1/tokens/$TOKEN_ADDRESS/delegations/quote
-```
-
-(Ponder also mounts its own `/health`, `/ready`, and `/status` on the same port.)
-
-### Tests
-
-```bash
-npm test               # unit + integration (happy path: event in -> cleartext out of the API)
-npm run test:contracts # forge-fhevm contract tests (run from contracts/ after ./setup.sh)
-```
-
-The unit test (error→state mapping) always runs. The two integration tests (a
-delegated user's amount comes out as cleartext; a non-delegated user's amount is
-surfaced as `pending_rights`, not dropped) hit the live API and **skip** unless the
-demo above is running — so a fresh `npm test` stays green, and once the demo is up
-they prove the end-to-end path.
-
-## Repository layout
+## Layout & environment
 
 ```
 contracts/        Foundry: ToyUSD + ConfidentialUSD (ERC-7984 wrapper) + forge-fhevm tests
-ponder.config.ts  chains + indexed contracts (token + ACL, filtered to the holder)
-ponder.schema.ts  database tables (see below)
-src/index.ts      indexing handlers (record every amount with a decryption state)
-src/api/          Hono read API (balances, history, delegations, health)
-src/abis/         vendored event ABIs (topic-exact) so the indexer runs without compiling Solidity
-src/config.ts     env parsing + HD account derivation
-scripts/          accounts, fund, deploy, seed
-docs/             CHALLENGE.md (brief), ARCHITECTURE.md, INDEXER.md, SDK-NOTES.md, AI-WORKFLOW.md, DEMO.md
-DECISIONS.md      trade-offs, reflection, SDK feedback, AI-assistance notes
+ponder.config.ts  indexed contracts (token + ACL, filtered to the holder)
+ponder.schema.ts  DB tables: transfers, balances, delegations
+src/index.ts      indexing handlers   src/backfill.ts  decryption backfill
+src/api/          Hono read API        src/abis/        vendored event ABIs
+scripts/          accounts · fund · deploy · seed · delegate · transfer · unshield
 ```
 
-## Database tables
+All actors derive from **one HD mnemonic** at fixed indices (funder=0, deployer=1,
+holder=2, users=3+); `scripts/fund.ts` fans gas from the funder. No real keys —
+the default is the public hardhat test phrase. Every variable is in
+[`.env.example`](.env.example).
 
-Ponder owns and reorg-manages the database; we define the tables in
-`ponder.schema.ts` (it's [drizzle](https://orm.drizzle.team/) — fully
-customizable). See [`docs/INDEXER.md`](docs/INDEXER.md) for how this is wired and
-how decryption backfills cleartext.
-
-| Table | One row per | Notable columns |
-| --- | --- | --- |
-| `transfers` | transfer / mint / burn / shield / unshield event | `amountHandle` (ciphertext, always set), `amount` (cleartext, when known), `decryptionState`, `kind`, `from`, `to` |
-| `balances` | (token, account) | `balanceHandle`, `balance` (cleartext when entitled), `decryptionState` |
-| `delegations` | (token, delegator) | which addresses granted the holder decrypt rights: `delegator`, `delegate`, `active`, `expiry` |
-
-`decryptionState` (`pending_rights` → `pending_propagation` → `decrypted`, or
-`failed`) appears on every amount-bearing row, so the API never hides an
-undecryptable amount — it reports the state instead.
-
-## Environment
-
-Every variable the service reads is documented in
-[`.env.example`](.env.example). All actors (funder, deployer, indexer holder,
-test users) derive from **one HD mnemonic** at fixed indices; `scripts/fund.ts`
-tops the others up from the funder (index 0, the only address you faucet). No real
-keys or funds — the default mnemonic is the public hardhat/anvil test phrase.
-
-### RPC rate limits
-
-Set `SEPOLIA_RPC_URL` to any Sepolia endpoint; the default is a public node
-(no key). **Indexing alone is fine on a free Infura key** (Core plan: 6M
-credits/day, 2k credits/sec — far more than indexing one contract needs; the
-`HttpRequestError` warnings during backfill are just the per-second burst cap,
-which Ponder retries automatically).
-
-**But the SDK's decryption path is RPC-heavier than expected:** each decrypt makes
-batched on-chain calls (an ACL delegation check, etc.), and on a free Infura key
-those bursts get `-32005 Too Many Requests`, which surfaces as a confusing
-`DECRYPTION_FAILED`. Use a **public node** (the default) or a **free Alchemy key**
-for the decryption flow — both have enough burst headroom. (Found the hard way;
-noted in DECISIONS as SDK feedback.)
+> **RPC note:** any Sepolia endpoint works for indexing; the SDK's decryption path
+> is RPC-heavy and 429s on a free Infura key, so it uses a separate `DECRYPT_RPC_URL`
+> (a public node by default). Details in [DECISIONS.md](DECISIONS.md) (SDK feedback).

@@ -93,7 +93,7 @@ API that doesn't exist in this package. It also assumed a vanilla ERC-20
 `ConfidentialTransfer(from, to, euint64 indexed amount)` with the amount as an
 encrypted handle in a log topic. Both were caught by the §1 rule — forcing a
 source-grounded pass before writing code — and both corrections are recorded in
-`DECISIONS.md §13`.
+`DECISIONS.md` (AI assistance).
 
 ## 7. Tests after the system existed — and being honest about coverage
 

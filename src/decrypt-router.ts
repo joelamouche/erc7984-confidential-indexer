@@ -51,7 +51,7 @@ export function uniqueHandles(items: DecryptItem[]): Hex[] {
 // Real gateway propagation after a delegation is ~4s (measured on Sepolia). So a
 // row *still* reporting "not propagated" after several backfill ticks isn't
 // propagating — it's a real error the SDK mislabels (it maps a bare relayer HTTP
-// 500 to DelegationNotPropagatedError; see DECISIONS §12). Cap how long a row may
+// 500 to DelegationNotPropagatedError; see DECISIONS SDK feedback). Cap how long a row may
 // sit in the optimistic `pending_propagation` state before it escalates to
 // `failed`, so it surfaces in /v1/health instead of retrying forever silently.
 export const MAX_PROPAGATION_ATTEMPTS = 5;
