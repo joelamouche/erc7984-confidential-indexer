@@ -218,9 +218,30 @@ Timing notes for the recording:
   `decrypted`. So the user-visible wait is mostly the backfill cadence, not the
   gateway.
 
-## Tests (optional to show)
+## Tests — the brief's "light tests" ask
+
+The brief asks for *a happy-path test (event in → correct cleartext out of the API)*
+and *one negative test of your choice, explained*. To say on camera:
+
+- **Happy path** (`test/api.test.ts`): a delegated user's `shield` event went in →
+  the API returns `decryptionState: "decrypted", amount: "100000000"` (100 cUSD).
+  Event in, correct cleartext out — end to end through the real API.
+- **Negative test (the one I picked):** an address the holder has **no decrypt
+  rights** for → the API returns an honest `pending` with `amount: null` — **not a
+  500, not a fabricated number.**
+- **Why this negative:** it pins the brief's *central* rule. For a confidential
+  indexer the interesting failure mode isn't "decryption errored" — it's *what the
+  API does when it legitimately can't decrypt*. The only correct answers are
+  **never drop the event** and **never invent a value**; surfacing an honest
+  "pending, no cleartext" is exactly that. A test that proves we don't fabricate is
+  worth more here than any other negative.
+
+Backing those up: unit tests for the state machine + the decrypt router, and a
+gated end-to-end **transition** test (`pending → delegate → decrypted`, with the
+health backlog rising and draining).
 
 ```bash
-npm test                 # unit + (if the demo above is live) integration matrix
-npm run lint             # no `any` allowed
+npm test                                       # unit + (if the demo is live) integration matrix
+npm run lint                                   # no `any` allowed
+INTEGRATION_SLOW=true npm test -- transition   # gated full transition on Sepolia
 ```
