@@ -62,55 +62,55 @@ export async function runBackfill(db: Context["db"], blockTime: bigint): Promise
 }
 
 async function backfillTransfers(db: Context["db"], token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
-  const due = or(isNull(transfers.lastAttemptAt), lt(transfers.lastAttemptAt, blockTime - BACKOFF_SECONDS));
-  const rows = await db.sql
+  const dueForRetry = or(isNull(transfers.lastAttemptAt), lt(transfers.lastAttemptAt, blockTime - BACKOFF_SECONDS));
+  const pendingTransfers = await db.sql
     .select()
     .from(transfers)
-    .where(and(eq(transfers.token, token), inArray(transfers.decryptionState, PENDING), isNull(transfers.amount), due))
+    .where(and(eq(transfers.token, token), inArray(transfers.decryptionState, PENDING), isNull(transfers.amount), dueForRetry))
     .limit(BATCH);
 
-  const items: DecryptItem[] = rows.map((r) => ({
-    id: r.id,
-    handle: r.amountHandle,
-    parties: [getAddress(r.from), getAddress(r.to)].filter((a) => a !== zeroAddress),
+  const decryptItems: DecryptItem[] = pendingTransfers.map((transfer) => ({
+    id: transfer.id,
+    handle: transfer.amountHandle,
+    parties: [getAddress(transfer.from), getAddress(transfer.to)].filter((a) => a !== zeroAddress),
   }));
 
   const update: Update = async (id, patch) => {
     if (patch.state === "decrypted") console.log(`[backfill] decrypted transfer ${id} = ${patch.amount} (via ${patch.via})`);
-    await db.update(transfers, { id }).set((row) => ({
-      amount: patch.amount ?? row.amount,
-      decryptionState: escalateState(patch.state, row.attempts + 1),
-      decryptedVia: patch.via ?? row.decryptedVia,
-      attempts: row.attempts + 1,
+    await db.update(transfers, { id }).set((current) => ({
+      amount: patch.amount ?? current.amount,
+      decryptionState: escalateState(patch.state, current.attempts + 1),
+      decryptedVia: patch.via ?? current.decryptedVia,
+      attempts: current.attempts + 1,
       lastAttemptAt: blockTime,
     }));
   };
 
-  if (items.length) console.log(`[backfill] ${items.length} transfer(s) pending + due; routing to decrypt…`);
-  await routeAndDecrypt(token, HOLDER, activeDelegators, items, runDecryptSubprocess, update);
+  if (decryptItems.length) console.log(`[backfill] ${decryptItems.length} transfer(s) pending + due; routing to decrypt…`);
+  await routeAndDecrypt(token, HOLDER, activeDelegators, decryptItems, runDecryptSubprocess, update);
 }
 
 async function backfillBalances(db: Context["db"], token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
-  const due = or(isNull(balances.lastAttemptAt), lt(balances.lastAttemptAt, blockTime - BACKOFF_SECONDS));
-  const rows = await db.sql
+  const dueForRetry = or(isNull(balances.lastAttemptAt), lt(balances.lastAttemptAt, blockTime - BACKOFF_SECONDS));
+  const pendingBalances = await db.sql
     .select()
     .from(balances)
-    .where(and(eq(balances.token, token), inArray(balances.decryptionState, PENDING), isNull(balances.balance), due))
+    .where(and(eq(balances.token, token), inArray(balances.decryptionState, PENDING), isNull(balances.balance), dueForRetry))
     .limit(BATCH);
 
-  const items: DecryptItem[] = rows.flatMap((r) =>
-    r.balanceHandle == null ? [] : [{ id: r.id, handle: r.balanceHandle, parties: [getAddress(r.account)] }],
+  const decryptItems: DecryptItem[] = pendingBalances.flatMap((balance) =>
+    balance.balanceHandle == null ? [] : [{ id: balance.id, handle: balance.balanceHandle, parties: [getAddress(balance.account)] }],
   );
 
   const update: Update = async (id, patch) => {
     if (patch.state === "decrypted") console.log(`[backfill] decrypted balance  ${id} = ${patch.amount} (via ${patch.via})`);
-    await db.update(balances, { id }).set((row) => ({
-      balance: patch.amount ?? row.balance,
-      decryptionState: escalateState(patch.state, row.attempts + 1),
-      attempts: row.attempts + 1,
+    await db.update(balances, { id }).set((current) => ({
+      balance: patch.amount ?? current.balance,
+      decryptionState: escalateState(patch.state, current.attempts + 1),
+      attempts: current.attempts + 1,
       lastAttemptAt: blockTime,
     }));
   };
 
-  await routeAndDecrypt(token, HOLDER, activeDelegators, items, runDecryptSubprocess, update);
+  await routeAndDecrypt(token, HOLDER, activeDelegators, decryptItems, runDecryptSubprocess, update);
 }
