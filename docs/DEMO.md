@@ -35,7 +35,7 @@ then prints the addresses to use:
 npm run demo:reset
 # ...
 #   DELEGATED   (cleartext): 0xE80B…, 0xA05a…, 0x4526…, 0x0d46…
-#   NONDELEGATED (pending) : 0x35bea8…
+#   NONDELEGATED (pending) : 0x1f363e…
 ```
 
 Export the addresses it prints (the delegated cohort is stable; the non-delegated
@@ -44,7 +44,7 @@ subject is whatever `demo:reset` reports — it advances to a fresh one each tim
 ```bash
 export TOKEN=$(grep '^TOKEN_ADDRESS' .env | cut -d'"' -f2)
 export DELEGATED=0xE80BCB2f35864E63Bd4E58E25C08538868eE1521    # a delegated user (cleartext) — from demo:reset
-export NONDELEGATED=0x35bea82Efa37dAFeE1b93bEe230334fD24a7300B # the fresh non-delegated subject — from demo:reset
+export NONDELEGATED=0x1f363e49D1453858147F2E51dBB184286dd1899f # the fresh non-delegated subject — from demo:reset
 alias jqp='python3 -m json.tool'
 ```
 
@@ -151,7 +151,7 @@ npm run delegate -- subject    # the non-delegated subject grants the indexer de
 
 Immediately on **Terminal 1** you'll see:
 ```
-[acl]   DELEGATION observed: 0x35bea8 → holder; promoting their pending rows for backfill
+[acl]   DELEGATION observed: 0x1f363e → holder; promoting their pending rows for backfill
 ```
 Now check the backlog — it should **jump**, because the subject's history just
 became work we're *entitled* to do:
