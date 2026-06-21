@@ -17,6 +17,7 @@ export const HOLDER: Address = accounts.indexerHolder.address;
 
 let sdk: ZamaSDK | undefined;
 
+/** Lazily build (and memoise) the ZamaSDK instance configured as the holder. */
 export function getZamaSdk(): ZamaSDK {
   if (sdk) return sdk;
   // Decryption uses its own RPC (see DECRYPT_RPC_URL) so its bursty batched calls

@@ -13,6 +13,7 @@ import {
 
 export type DecryptState = "decrypted" | "pending_rights" | "pending_propagation" | "failed";
 
+/** Map a thrown SDK error instance to the per-amount decryption state. */
 export function errorToState(err: unknown): DecryptState {
   // Holder lacks a usable handle for this account → awaiting a (further) grant.
   if (err instanceof NoCiphertextError) return "pending_rights";

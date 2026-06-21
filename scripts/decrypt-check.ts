@@ -14,6 +14,7 @@ import { publicClient } from "../src/chain";
 import { confidentialTokenAbi } from "../src/abis/confidentialToken";
 import { delegatedDecrypt } from "../src/zama/sdk";
 
+/** Decrypt one user's balance handle as the holder via delegation (isolation check). */
 async function main() {
   if (!env.TOKEN_ADDRESS) throw new Error("TOKEN_ADDRESS not set.");
   const idx = Number(process.argv[2] ?? 0);

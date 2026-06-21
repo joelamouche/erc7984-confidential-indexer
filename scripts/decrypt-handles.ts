@@ -21,25 +21,27 @@ interface Job {
   groups: Group[];
 }
 
+/** Read the whole job JSON piped in on stdin. */
 async function readStdin(): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const c of process.stdin) chunks.push(c as Buffer);
   return Buffer.concat(chunks).toString("utf8");
 }
 
+/** Decrypt each group via the SDK and write {values|errorName} per group to stdout. */
 async function main() {
   const job: Job = JSON.parse(await readStdin());
   const out: { groups: Array<{ values?: Record<string, string>; errorName?: string }> } = { groups: [] };
 
-  for (const g of job.groups) {
+  for (const group of job.groups) {
     try {
-      const res = g.delegator
-        ? await delegatedDecrypt(g.handles, job.contractAddress, g.delegator)
-        : await holderDecrypt(g.handles, job.contractAddress);
+      const decrypted = group.delegator
+        ? await delegatedDecrypt(group.handles, job.contractAddress, group.delegator)
+        : await holderDecrypt(group.handles, job.contractAddress);
       const values: Record<string, string> = {};
-      for (const h of g.handles) {
-        const v = res[h];
-        if (v !== undefined) values[h] = v.toString();
+      for (const handle of group.handles) {
+        const cleartext = decrypted[handle];
+        if (cleartext !== undefined) values[handle] = cleartext.toString();
       }
       out.groups.push({ values });
     } catch (err) {

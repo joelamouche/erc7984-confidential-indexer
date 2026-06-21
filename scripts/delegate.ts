@@ -15,6 +15,7 @@ import { accounts, env } from "../src/config";
 import { chain, publicClient } from "../src/chain";
 import { aclAbi } from "../src/abis/acl";
 
+/** Grant the indexer holder decrypt rights, signed by a test user (the delegator). */
 async function main() {
   if (!env.TOKEN_ADDRESS) throw new Error("TOKEN_ADDRESS not set — run `npm run deploy`.");
   const idx = Number(process.argv[2] ?? 0);

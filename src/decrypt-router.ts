@@ -44,6 +44,7 @@ export interface Patch {
 }
 export type Update = (id: string, patch: Patch) => Promise<void>;
 
+/** The distinct ciphertext handles in a set of items (one decrypt per handle). */
 export function uniqueHandles(items: DecryptItem[]): Hex[] {
   return [...new Set(items.map((i) => i.handle))];
 }
@@ -62,9 +63,22 @@ export function escalateState(state: DecryptState, attemptsAfter: number): Decry
 }
 
 /**
- * Route items, decrypt the entitled ones in a single job, and persist outcomes.
- * No-rights items never reach the runner (no wasted gateway call) — they're just
- * recorded as `pending_rights`.
+ * Route each item to a decrypt path and persist the outcome. Shared by both the
+ * transfer and balance backfills (an `item` is a handle + the accounts that could
+ * decrypt it), so this is the single place the rights logic lives.
+ *
+ * Three buckets:
+ *  - **holder is a party** → decrypt as the holder
+ *  - **a party delegated to the holder** → decrypt as that delegate
+ *  - **neither (no rights yet)** → re-record `pending_rights` WITHOUT a gateway
+ *    call. We still bump `lastAttemptAt` (in the caller's `update`) so the row
+ *    backs off and doesn't hog the batch every tick. These rows are normally
+ *    promoted *event-driven* — the ACL handler moves a delegator's `pending_rights`
+ *    rows to `pending_propagation` when a delegation is indexed — so this poll is
+ *    only the safety net for anything the events missed.
+ *
+ * So `pending_rights` rows are selected by the backfill for a reason: the first
+ * two buckets are decryptable-but-not-yet-decrypted; only the third is a no-op.
  */
 export async function routeAndDecrypt(
   token: Address,
@@ -74,57 +88,60 @@ export async function routeAndDecrypt(
   runDecrypt: DecryptRunner,
   update: Update,
 ): Promise<void> {
-  const holderGroup: DecryptItem[] = [];
-  const delegatedGroups = new Map<Address, DecryptItem[]>();
-  const noRights: DecryptItem[] = [];
+  // First, sort each item by *how* we'd decrypt it.
+  const itemsHolderCanDecrypt: DecryptItem[] = []; // holder is a party
+  const itemsByDelegator = new Map<Address, DecryptItem[]>(); // a party delegated to the holder
+  const itemsWithNoRights: DecryptItem[] = []; // neither — nothing we can do yet
 
-  for (const it of items) {
-    if (it.parties.includes(holder)) {
-      holderGroup.push(it);
+  for (const item of items) {
+    if (item.parties.includes(holder)) {
+      itemsHolderCanDecrypt.push(item);
     } else {
-      const delegator = it.parties.find((p) => activeDelegators.has(p));
+      const delegator = item.parties.find((party) => activeDelegators.has(party));
       if (delegator) {
-        const g = delegatedGroups.get(delegator) ?? [];
-        g.push(it);
-        delegatedGroups.set(delegator, g);
+        const itemsForDelegator = itemsByDelegator.get(delegator) ?? [];
+        itemsForDelegator.push(item);
+        itemsByDelegator.set(delegator, itemsForDelegator);
       } else {
-        noRights.push(it);
+        itemsWithNoRights.push(item);
       }
     }
   }
 
   // No rights: record the attempt, stay pending_rights — do NOT call the gateway.
-  for (const it of noRights) await update(it.id, { state: "pending_rights", via: null });
+  for (const item of itemsWithNoRights) await update(item.id, { state: "pending_rights", via: null });
 
-  const groups: Array<{ delegator: Address | null; via: DecryptedVia; items: DecryptItem[] }> = [];
-  if (holderGroup.length) groups.push({ delegator: null, via: "holder", items: holderGroup });
-  for (const [delegator, group] of delegatedGroups) groups.push({ delegator, via: "delegation", items: group });
-  if (groups.length === 0) return;
+  // Build one decrypt job per identity we can decrypt as: the holder, then one per delegator.
+  const groupsToDecrypt: Array<{ delegator: Address | null; via: DecryptedVia; items: DecryptItem[] }> = [];
+  if (itemsHolderCanDecrypt.length) groupsToDecrypt.push({ delegator: null, via: "holder", items: itemsHolderCanDecrypt });
+  for (const [delegator, items] of itemsByDelegator) groupsToDecrypt.push({ delegator, via: "delegation", items });
+  if (groupsToDecrypt.length === 0) return;
 
-  let result: DecryptResult;
+  let decryptResult: DecryptResult;
   try {
-    result = await runDecrypt({
+    decryptResult = await runDecrypt({
       contractAddress: token,
-      groups: groups.map((g) => ({ delegator: g.delegator, handles: uniqueHandles(g.items) })),
+      groups: groupsToDecrypt.map((group) => ({ delegator: group.delegator, handles: uniqueHandles(group.items) })),
     });
   } catch {
     // Whole job failed (e.g. subprocess died) → transient, back off and retry.
-    for (const g of groups) for (const it of g.items) await update(it.id, { state: "failed", via: null });
+    for (const group of groupsToDecrypt) for (const item of group.items) await update(item.id, { state: "failed", via: null });
     return;
   }
 
-  for (let i = 0; i < groups.length; i++) {
-    const g = groups[i]!;
-    const r = result.groups[i];
-    if (r?.values) {
-      for (const it of g.items) {
-        const cv = r.values[it.handle];
-        if (cv !== undefined) await update(it.id, { amount: BigInt(cv), state: "decrypted", via: g.via });
-        else await update(it.id, { state: "pending_rights", via: null });
+  // decryptResult.groups is positionally aligned with groupsToDecrypt.
+  for (let i = 0; i < groupsToDecrypt.length; i++) {
+    const group = groupsToDecrypt[i]!;
+    const groupResult = decryptResult.groups[i];
+    if (groupResult?.values) {
+      for (const item of group.items) {
+        const cleartext = groupResult.values[item.handle];
+        if (cleartext !== undefined) await update(item.id, { amount: BigInt(cleartext), state: "decrypted", via: group.via });
+        else await update(item.id, { state: "pending_rights", via: null });
       }
     } else {
-      const state = errorNameToState(r?.errorName);
-      for (const it of g.items) await update(it.id, { state, via: null });
+      const state = errorNameToState(groupResult?.errorName);
+      for (const item of group.items) await update(item.id, { state, via: null });
     }
   }
 }

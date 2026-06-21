@@ -28,6 +28,7 @@ function jsonable<T>(row: T): T {
 // ok = current + error-free, degraded = behind but functioning, down = erroring.
 type HealthStatus = "ok" | "degraded" | "down";
 const HEALTH_RANK: Record<HealthStatus, number> = { ok: 0, degraded: 1, down: 2 };
+/** The more-severe of two health statuses (down > degraded > ok). */
 function worst(a: HealthStatus, b: HealthStatus): HealthStatus {
   return HEALTH_RANK[a] >= HEALTH_RANK[b] ? a : b;
 }
@@ -38,6 +39,7 @@ class ApiError extends Error {
   }
 }
 
+/** Validate `:token` and assert it's the token this indexer tracks; else 422/404. */
 function requireToken(token: string) {
   if (!isAddress(token)) throw new ApiError(422, "invalid_token", `Not an address: ${token}`);
   const t = getAddress(token);
@@ -45,6 +47,7 @@ function requireToken(token: string) {
   return t;
 }
 
+/** Validate + checksum an address path param; 422 if malformed. */
 function requireAddress(addr: string) {
   if (!isAddress(addr)) throw new ApiError(422, "invalid_address", `Not an address: ${addr}`);
   return getAddress(addr);
@@ -115,34 +118,36 @@ app.get("/v1/tokens/:token/addresses/:address/transfers", async (c) => {
       : undefined,
   );
 
-  const rows = await db
+  const matchedTransfers = await db
     .select()
     .from(transfers)
     .where(base)
     .orderBy(desc(transfers.blockNumber), desc(transfers.logIndex))
     .limit(limit + 1);
 
-  const page = rows.slice(0, limit);
+  const page = matchedTransfers.slice(0, limit);
   const next =
-    rows.length > limit ? encodeCursor(page[page.length - 1]!.blockNumber, page[page.length - 1]!.logIndex) : null;
+    matchedTransfers.length > limit
+      ? encodeCursor(page[page.length - 1]!.blockNumber, page[page.length - 1]!.logIndex)
+      : null;
 
   return c.json({
     token,
     address,
-    transfers: page.map((t) =>
+    transfers: page.map((transfer) =>
       jsonable({
-        id: t.id,
-        kind: t.kind,
-        from: t.from,
-        to: t.to,
-        amount: t.amount, // null where not yet decryptable
-        amountHandle: t.amountHandle,
-        decryptionState: t.decryptionState,
-        decryptedVia: t.decryptedVia,
-        unwrapStatus: t.unwrapStatus, // unshield rows: requested | finalized (else null)
-        blockNumber: t.blockNumber,
-        blockTime: t.blockTime,
-        txHash: t.txHash,
+        id: transfer.id,
+        kind: transfer.kind,
+        from: transfer.from,
+        to: transfer.to,
+        amount: transfer.amount, // null where not yet decryptable
+        amountHandle: transfer.amountHandle,
+        decryptionState: transfer.decryptionState,
+        decryptedVia: transfer.decryptedVia,
+        unwrapStatus: transfer.unwrapStatus, // unshield rows: requested | finalized (else null)
+        blockNumber: transfer.blockNumber,
+        blockTime: transfer.blockTime,
+        txHash: transfer.txHash,
       }),
     ),
     nextCursor: next,
@@ -233,11 +238,11 @@ app.get("/v1/health", async (c) => {
   // --- Decryption backlog (size + age) ---
   // Addresses we currently hold usable decrypt rights for.
   const nowSec = BigInt(Math.floor(Date.now() / 1000));
-  const dels = await db
+  const activeDelegations = await db
     .select({ delegator: delegations.delegator })
     .from(delegations)
     .where(and(eq(delegations.active, true), gt(delegations.expiry, nowSec)));
-  const delegators = dels.map((d) => d.delegator);
+  const delegators = activeDelegations.map((delegation) => delegation.delegator);
 
   // Split the entitled-but-undecrypted backlog into two buckets:
   //   inFlight = still being worked (pending_rights / pending_propagation)
@@ -331,9 +336,11 @@ app.get("/v1/health", async (c) => {
   );
 });
 
+/** Opaque pagination cursor encoding the last row's (block, logIndex). */
 function encodeCursor(block: bigint, logIndex: number): string {
   return Buffer.from(`${block}:${logIndex}`).toString("base64url");
 }
+/** Decode a pagination cursor back to (block, logIndex), or undefined if absent. */
 function decodeCursor(cursor: string | undefined): { block: bigint; logIndex: number } | undefined {
   if (!cursor) return undefined;
   const [block, logIndex] = Buffer.from(cursor, "base64url").toString().split(":");

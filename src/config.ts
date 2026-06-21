@@ -70,6 +70,7 @@ const EnvSchema = z.object({
   MAX_DECRYPT_LAG_SECONDS: z.coerce.number().int().positive().default(600),
 });
 
+/** Validate process.env against the schema; throw a readable error if invalid. */
 function parseEnv() {
   const parsed = EnvSchema.safeParse(process.env);
   if (!parsed.success) {
@@ -83,6 +84,7 @@ function parseEnv() {
 
 export const env = parseEnv();
 
+/** Derive the HD account at `<DERIVATION_PATH>/<index>` from the mnemonic. */
 function deriveAccount(index: number): HDAccount {
   return mnemonicToAccount(env.MNEMONIC, {
     path: `${env.DERIVATION_PATH}/${index}` as `m/44'/60'/0'/0/${number}`,
@@ -98,6 +100,7 @@ export interface RoleAccount {
   address: Address;
 }
 
+/** Bundle a role label with its derived account and address. */
 function roleAccount(role: Role, index: number): RoleAccount {
   const account = deriveAccount(index);
   return { role, index, account, address: account.address };

@@ -19,6 +19,7 @@ import { accounts, env } from "../src/config";
 import { chain, publicClient } from "../src/chain";
 import { loadAbi } from "../src/artifacts";
 
+/** SDK-encrypt an amount and send a confidential transfer between two test users. */
 async function main() {
   if (!env.TOKEN_ADDRESS) throw new Error("TOKEN_ADDRESS not set — run `npm run deploy`.");
   const sender = accounts.testUsers[Number(process.argv[2] ?? 0)];

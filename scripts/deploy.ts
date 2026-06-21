@@ -13,6 +13,7 @@ import { createWalletClient, getAddress, http, parseGwei, type Abi, type Hex } f
 import { accounts, env } from "../src/config";
 import { chain, publicClient } from "../src/chain";
 
+/** Load a compiled contract's ABI + bytecode from contracts/out. */
 function loadArtifact(name: string): { abi: Abi; bytecode: Hex } {
   const path = resolve(`contracts/out/${name}.sol/${name}.json`);
   const json = JSON.parse(readFileSync(path, "utf8"));
@@ -40,6 +41,7 @@ interface Fees {
   maxPriorityFeePerGas: bigint;
 }
 
+/** Deploy one contract (explicit nonce + bumped fees) and return its address + block. */
 async function deploy(
   wallet: ReturnType<typeof createWalletClient>,
   name: string,
@@ -74,6 +76,7 @@ async function deploy(
   return { address: getAddress(receipt.contractAddress), blockNumber: receipt.blockNumber };
 }
 
+/** Deploy ToyUSD + ConfidentialUSD to Sepolia and write the addresses into .env. */
 async function main() {
   console.log(`\nDeploying to ${chain.name} (${env.CHAIN_ID}) as deployer ${accounts.deployer.address}\n`);
 

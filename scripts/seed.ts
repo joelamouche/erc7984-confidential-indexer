@@ -29,6 +29,7 @@ const PLAN: Array<{ user: RoleAccount; mint: string; wrap: string }> = [
   { user: accounts.testUsers[2]!, mint: "1000", wrap: "50" },
 ];
 
+/** Current EIP-1559 fee overrides with headroom for Sepolia volatility. */
 async function fees() {
   const block = await publicClient.getBlock();
   const base = block.baseFeePerGas ?? parseGwei("1");
@@ -36,10 +37,12 @@ async function fees() {
   return { maxPriorityFeePerGas, maxFeePerGas: base * 3n + maxPriorityFeePerGas };
 }
 
+/** A wallet client bound to a given role's account. */
 function walletFor(role: RoleAccount) {
   return createWalletClient({ account: role.account, chain, transport: http(env.SEPOLIA_RPC_URL) });
 }
 
+/** Send a contract write from a role and wait for its receipt. */
 async function write(
   role: RoleAccount,
   address: Address,
@@ -61,6 +64,7 @@ async function write(
   return hash;
 }
 
+/** Mint ToyUSD to each test user and wrap (shield) a chunk into confidential cUSD. */
 async function main() {
   const f = await fees();
   const dec = 6;

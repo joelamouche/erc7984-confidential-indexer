@@ -29,7 +29,7 @@ function runDecryptSubprocess(job: DecryptJob): Promise<DecryptResult> {
       stdio: ["pipe", "pipe", "inherit"],
     });
     let out = "";
-    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stdout.on("data", (chunk) => (out += chunk.toString()));
     child.on("error", rejectP);
     child.on("close", (code) => {
       if (code !== 0) return rejectP(new Error(`decrypt subprocess exited ${code}`));
@@ -44,23 +44,39 @@ function runDecryptSubprocess(job: DecryptJob): Promise<DecryptResult> {
   });
 }
 
+// Max rows drained per backfill run, *per table* (so up to BATCH transfers + BATCH
+// balances each run). The batch is decrypted in ONE batched SDK call, so this
+// bounds per-run work and gateway payload size — not the number of round-trips.
+// Sustained throughput ≈ BATCH ÷ the Backfill block interval (~24s, see
+// ponder.config.ts) ≈ ~1 row/s; raise BATCH and/or shorten the interval for more.
+// The real scale answer (worker fleet, parallel batches) is docs/INDEXER.md §6.
 const BATCH = 25;
+// Minimum seconds between decrypt retries for the *same* row (gated via
+// lastAttemptAt). Stops not-yet-decryptable rows from re-consuming the batch every
+// run, so genuinely-due work isn't crowded out.
 const BACKOFF_SECONDS = 60n;
+// The states the backfill re-attempts. `pending_rights` is kept here as a safety
+// net — rows are normally promoted out of it event-driven by the ACL handler when
+// a delegation is indexed; this re-scan only catches anything the events missed.
 const PENDING: DecryptState[] = ["pending_rights", "pending_propagation", "failed"];
 
+/** One backfill tick: resolve who we can decrypt for, then drain pending transfers + balances. */
 export async function runBackfill(db: Context["db"], blockTime: bigint): Promise<void> {
   const token = getAddress(env.TOKEN_ADDRESS as string);
 
-  // Delegators whose grants are currently usable by the holder.
-  const dels = await db.sql.select().from(delegations).where(eq(delegations.active, true));
+  // Delegators whose grants are currently usable by the holder (active + unexpired).
+  const activeDelegations = await db.sql.select().from(delegations).where(eq(delegations.active, true));
   const activeDelegators = new Set<Address>(
-    dels.filter((d: { expiry: bigint }) => d.expiry > blockTime).map((d: { delegator: string }) => getAddress(d.delegator)),
+    activeDelegations
+      .filter((delegation: { expiry: bigint }) => delegation.expiry > blockTime)
+      .map((delegation: { delegator: string }) => getAddress(delegation.delegator)),
   );
 
   await backfillTransfers(db, token, blockTime, activeDelegators);
   await backfillBalances(db, token, blockTime, activeDelegators);
 }
 
+/** Decrypt a bounded batch of pending, retry-due transfer amounts; persist outcomes. */
 async function backfillTransfers(db: Context["db"], token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
   const dueForRetry = or(isNull(transfers.lastAttemptAt), lt(transfers.lastAttemptAt, blockTime - BACKOFF_SECONDS));
   const pendingTransfers = await db.sql
@@ -90,6 +106,7 @@ async function backfillTransfers(db: Context["db"], token: Address, blockTime: b
   await routeAndDecrypt(token, HOLDER, activeDelegators, decryptItems, runDecryptSubprocess, update);
 }
 
+/** Decrypt a bounded batch of pending, retry-due balance handles; persist outcomes. */
 async function backfillBalances(db: Context["db"], token: Address, blockTime: bigint, activeDelegators: Set<Address>) {
   const dueForRetry = or(isNull(balances.lastAttemptAt), lt(balances.lastAttemptAt, blockTime - BACKOFF_SECONDS));
   const pendingBalances = await db.sql

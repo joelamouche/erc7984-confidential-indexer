@@ -71,3 +71,17 @@ Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - Prefer composing the chosen primitives over hand-rolling; if you hand-roll
   something the libraries should do, justify it in `DECISIONS.md`.
 - Keep `.env.example` in sync with every `process.env` / config var you read.
+
+## Code style preferences
+
+- **Name variables for what they hold**, not their shape. No `rows` / `items` /
+  `r` / `d` / `x`; prefer `pendingTransfers`, `decryptItems`, `transfer`,
+  `delegation`, `current`. Single-letter params are OK only in trivial idiomatic
+  scopes (a loop `i`, a zod `(v) => …` transform).
+- **Every named/exported function gets a short doc comment** (`/** … */`) saying
+  what it does and any non-obvious why — so the code reads top-down without
+  decoding the body. Inline anonymous callbacks don't each need one.
+- **Comment generously — err toward more explanation.** Any non-obvious constant,
+  config value, magic number, or tricky line gets a comment on *why* (e.g. a `BATCH`
+  size should explain the throughput implication; an `interval` should explain the
+  cadence it produces). Prefer over-explaining to leaving the next reader guessing.

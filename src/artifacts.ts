@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Abi, Hex } from "viem";
 
+/** Load a compiled contract's ABI + deploy bytecode from contracts/out. */
 export function loadArtifact(name: string): { abi: Abi; bytecode: Hex } {
   const path = resolve(`contracts/out/${name}.sol/${name}.json`);
   const json = JSON.parse(readFileSync(path, "utf8"));
@@ -13,6 +14,7 @@ export function loadArtifact(name: string): { abi: Abi; bytecode: Hex } {
   return { abi: json.abi as Abi, bytecode };
 }
 
+/** Load just the ABI of a compiled contract. */
 export function loadAbi(name: string): Abi {
   return loadArtifact(name).abi;
 }

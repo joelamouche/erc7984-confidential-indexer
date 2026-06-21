@@ -32,14 +32,19 @@ export default createConfig({
       ],
     },
   },
+  // A Ponder *block source* (vs. the contract sources above): instead of firing a
+  // handler on a contract log, it fires one on a block schedule. This is how we run
+  // the decryption backfill periodically — Ponder has no cron, so block progress is
+  // the clock. The handler is `Backfill:block` in src/index.ts.
   blocks: {
-    // Drives the decryption backfill, decoupled from per-transfer events.
-    // interval 2 ≈ every ~24s on Sepolia. Since gateway propagation is ~4s (measured),
-    // the user-visible flip after a delegation is gated by this cadence — keep it
-    // tight so freshly-granted rows decrypt promptly (and the demo flips quickly).
     Backfill: {
       chain: "sepolia",
       startBlock: env.START_BLOCK,
+      // Run the backfill every 2 newly-indexed blocks. Sepolia blocks are ~12s
+      // apart, so that's ~24s of wall-clock (derived, not configured — it tracks
+      // block time). Gateway propagation is only ~4s (measured), so the user-visible
+      // decrypt flip after a delegation is gated by THIS cadence, not the gateway —
+      // kept tight so freshly-granted rows decrypt promptly and the demo flips fast.
       interval: 2,
     },
   },

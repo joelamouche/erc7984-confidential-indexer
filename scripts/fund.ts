@@ -17,6 +17,7 @@ interface Target {
   target: bigint;
 }
 
+/** Top each role up to its target balance from the funder (idempotent). */
 async function main() {
   const targets: Target[] = [
     { role: accounts.deployer, target: parseEther(env.FUND_DEPLOYER_ETH) },

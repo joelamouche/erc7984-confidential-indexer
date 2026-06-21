@@ -11,22 +11,23 @@ import { formatEther } from "viem";
 import { allRoles, env } from "../src/config";
 import { chain, publicClient } from "../src/chain";
 
+/** Print every role address and its balance; flag if the funder is unfunded. */
 async function main() {
   console.log(`\nChain: ${chain.name} (${env.CHAIN_ID})  RPC: ${env.SEPOLIA_RPC_URL}`);
   console.log(`Derivation: ${env.DERIVATION_PATH}/<index>\n`);
 
   const balances = await Promise.all(
-    allRoles.map((r) => publicClient.getBalance({ address: r.address })),
+    allRoles.map((role) => publicClient.getBalance({ address: role.address })),
   );
 
-  const rows = allRoles.map((r, i) => ({
-    role: r.role,
-    index: r.index,
-    address: r.address,
+  const table = allRoles.map((role, i) => ({
+    role: role.role,
+    index: role.index,
+    address: role.address,
     balanceETH: formatEther(balances[i]!),
   }));
 
-  console.table(rows);
+  console.table(table);
 
   const funderBalance = balances[0]!;
   if (funderBalance === 0n) {

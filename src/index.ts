@@ -14,10 +14,12 @@ import { getAddress, zeroAddress } from "viem";
 import { confidentialTokenAbi } from "./abis/confidentialToken";
 import { runBackfill } from "./backfill";
 
+/** Stable primary key for a transfer row: one per (tx, log). */
 function transferId(txHash: string, logIndex: number) {
   return `${txHash}-${logIndex}`;
 }
 
+/** Classify a ConfidentialTransfer by its zero-address party (mint=shield, burn=unshield). */
 function classifyKind(from: string, to: string): "transfer" | "shield" | "unshield" {
   // The indexed token IS the wrapper, so mint (from=0) is a shield and burn
   // (to=0) is an unshield. Plain holder-to-holder is a transfer.
