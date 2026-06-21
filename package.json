@@ -25,7 +25,8 @@
     "transfer": "tsx scripts/transfer.ts",
     "unshield": "tsx scripts/unshield.ts",
     "lint": "eslint .",
-    "revoke": "tsx scripts/revoke.ts"
+    "revoke": "tsx scripts/revoke.ts",
+    "demo:reset": "tsx scripts/demo-reset.ts"
   },
   "dependencies": {
     "@zama-fhe/sdk": "3.1.0-alpha.15",

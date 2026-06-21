@@ -24,22 +24,37 @@ camera — just point `.env` at the deployment and run the indexer.
 #   TOKEN_ADDRESS / WRAPPER_ADDRESS / START_BLOCK  # written by `npm run deploy`
 
 npm install            # if fresh clone
-npm run accounts       # note the role addresses; user0 is the delegated one
 ```
 
-Export a few shell vars so the curls are copy-pasteable (Terminal 2):
+**Set a known, clean demo state** (so you never hand-edit this doc — see
+"Resetting between demos" for why). This re-delegates the test-user cohort
+(→ cleartext history) and provisions one *fresh* non-delegated subject (→ pending),
+then prints the addresses to use:
+
+```bash
+npm run demo:reset
+# ...
+#   DELEGATED   (cleartext): 0xE80B…, 0xA05a…, 0x4526…, 0x0d46…
+#   NONDELEGATED (pending) : 0x35bea8…
+```
+
+Export the addresses it prints (the delegated cohort is stable; the non-delegated
+subject is whatever `demo:reset` reports — it advances to a fresh one each time):
 
 ```bash
 export TOKEN=$(grep '^TOKEN_ADDRESS' .env | cut -d'"' -f2)
-export U0=0xE80BCB2f35864E63Bd4E58E25C08538868eE1521   # user0 (delegated to the indexer)
-export U1=0xA05a9Aba3327D9575Adf5B0Eb68387185ba1Bb2C   # user1 (NOT delegated)
-export U2=0x4526AC35c2BbDB3890DA3901Fd5B3b1F568f1015   # user2 (NOT delegated)
+export DELEGATED=0xE80BCB2f35864E63Bd4E58E25C08538868eE1521    # a delegated user (cleartext) — from demo:reset
+export NONDELEGATED=0x35bea82Efa37dAFeE1b93bEe230334fD24a7300B # the fresh non-delegated subject — from demo:reset
 alias jqp='python3 -m json.tool'
 ```
 
-> Tip: start the indexer ~1–2 min before recording if you want it already caught
-> up. Or record the catch-up — `/v1/health` going `degraded → ok` is a nice live
-> illustration of "how far behind."
+> The doc never asserts "X is delegated" — you can always *check* live with
+> `curl localhost:42069/v1/tokens/$TOKEN/delegations/$ADDR`.
+
+> Tip: start the indexer ~5 min before recording so it's caught up. Or record the
+> catch-up — `/v1/health` going `degraded → ok` is a nice live illustration of "how
+> far behind." (A fresh `.ponder` re-sync is ~4–5 min for this deployment; or skip
+> it and resume an existing DB instantly.)
 
 ---
 
@@ -81,36 +96,34 @@ the catch-up, re-run this and watch `blocksBehind` fall to 0,
 `degraded → ok` (overall `status` is the worst of `indexing.status` and
 `decryptable.status`, each `ok | degraded | down`).
 
-### 2. A delegated user's history — all cleartext
+### 2. A delegated address's history — all cleartext
 
 ```bash
-curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U0/transfers" | jqp
+curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$DELEGATED/transfers" | jqp
 ```
 
-Point at: user0 **delegated** decrypt rights to the indexer, so every amount comes
-out cleartext — a `shield`, two `transfer`s, and an `unshield`, each
+Point at: this address **delegated** decrypt rights to the indexer, so every amount
+comes out cleartext — a `shield`, two `transfer`s, and an `unshield`, each
 `decryptionState: "decrypted"`, `decryptedVia: "delegation"`. Note the `unshield`
 also carries `unwrapStatus: "requested"` — we know the amount, but the gateway
 hasn't finalized the unwrap yet (a real in-between state, surfaced honestly).
 
-### 3. The money shot — a non-delegated user
+### 3. A non-delegated address — indexed, but no cleartext (never dropped)
 
 ```bash
-curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U1/transfers" | jqp
+curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$NONDELEGATED/transfers" | jqp
+curl -s "localhost:42069/v1/tokens/$TOKEN/delegations/$NONDELEGATED" | jqp   # active: false
 ```
 
-Point at user1, who **never delegated**:
-- their own `shield` and their outgoing `transfer` to user2 are `pending_rights`,
-  `amount: null` — **indexed, never dropped**, just not decryptable by us;
-- but the `transfer` they **received from user0** is **cleartext** — because the
-  transfer amount handle is readable by *both* parties, and user0 (the sender)
-  delegated. Decryption follows on-chain rights, exactly.
+Point at: this address **never delegated**, so its `shield` is `pending_rights`,
+`amount: null` — **indexed, never dropped, and never a fabricated number.** The
+indexer is honest about what it can't decrypt. (This is the negative test, live.)
 
-### 4. Current balance
+### 4. Current balance — delegated vs not
 
 ```bash
-curl -s "localhost:42069/v1/tokens/$TOKEN/balances/$U0" | jqp   # decrypted
-curl -s "localhost:42069/v1/tokens/$TOKEN/balances/$U1" | jqp   # pending_rights
+curl -s "localhost:42069/v1/tokens/$TOKEN/balances/$DELEGATED" | jqp     # decrypted, cleartext
+curl -s "localhost:42069/v1/tokens/$TOKEN/balances/$NONDELEGATED" | jqp  # pending_rights, null
 ```
 
 ### 5. How a partner gets a user to delegate (the indexer never holds a key)
@@ -129,19 +142,19 @@ with this; a typed-data permit would be the nicer v2.)
 
 ### 6. ⭐ The headline — a user opts in, and watch the backfill live
 
-This is the whole thesis in one move. **user1 is not delegated** (step 3). Have
-them delegate, then watch Terminal 1 and `/v1/health` react.
+This is the whole thesis in one move. `$NONDELEGATED` is pending (step 3). Have it
+delegate, then watch Terminal 1 and `/v1/health` react.
 
 ```bash
-npm run delegate -- 1          # user1 grants the indexer decrypt rights (ACL tx)
+npm run delegate -- subject    # the non-delegated subject grants the indexer decrypt rights (ACL tx)
 ```
 
 Immediately on **Terminal 1** you'll see:
 ```
-[acl]   DELEGATION observed: 0xA05a9A → holder; promoting their pending rows for backfill
+[acl]   DELEGATION observed: 0x35bea8 → holder; promoting their pending rows for backfill
 ```
-Now check the backlog — it should **jump**, because user1's history just became
-work we're *entitled* to do:
+Now check the backlog — it should **jump**, because the subject's history just
+became work we're *entitled* to do:
 
 ```bash
 curl -s localhost:42069/v1/health | jqp     # decryptable.inFlight > 0, oldestAgeSeconds large
@@ -150,14 +163,14 @@ curl -s localhost:42069/v1/health | jqp     # decryptable.inFlight > 0, oldestAg
 Wait only a few seconds (measured ~4s gateway sync on Sepolia; the flip is gated by
 the next backfill tick, not minutes). Terminal 1 then prints:
 ```
-[backfill] decrypted transfer 0x…- = 250000000 (via delegation)
-[backfill] decrypted balance  …    = … (via delegation)
+[backfill] decrypted transfer 0x…- = 50000000 (via delegation)
+[backfill] decrypted balance  …    = 50000000 (via delegation)
 ```
 And the API flips:
 
 ```bash
-curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U1/transfers" | jqp   # user1's history now cleartext
-curl -s localhost:42069/v1/health | jqp                                   # decryptable.inFlight back to 0
+curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$NONDELEGATED/transfers" | jqp   # now cleartext
+curl -s localhost:42069/v1/health | jqp                                             # decryptable.inFlight back to 0
 ```
 
 That's the full loop: **opt-in → ACL event → promote → backfill → cleartext**, with
@@ -165,22 +178,21 @@ the health endpoint showing the backlog rise and drain (ref. issue #5).
 
 ### 7. (Optional) Live indexing — a brand-new event on camera
 
-With Terminal 1 still running:
+With Terminal 1 still running, send a fresh transfer between two delegated users:
 
 ```bash
-npm run transfer -- 0 2 5     # user0 sends 5 cUSD to user2 (SDK-encrypted)
+npm run transfer -- 0 1 5     # user0 sends 5 cUSD to user1 (SDK-encrypted; both delegated)
 ```
 
 Wait ~15–20s (watch Terminal 1 for the `[index] transfer …` then
-`[backfill] decrypted transfer …` lines), then re-run user2's history:
+`[backfill] decrypted transfer …` lines), then re-run user1's history:
 
 ```bash
-curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$U2/transfers" | jqp
+curl -s "localhost:42069/v1/tokens/$TOKEN/addresses/$DELEGATED/transfers" | jqp
 ```
 
-Point at: the new transfer appears **live** (no restart, no re-scan) and is
-already `decrypted` (user0, the sender, is delegated). That's realtime indexing +
-decrypt.
+Point at: the new transfer appears **live** (no restart, no re-scan) and is already
+`decrypted`. That's realtime indexing + decrypt.
 
 ---
 
@@ -248,39 +260,28 @@ INTEGRATION_SLOW=true npm test -- transition   # gated full transition on Sepoli
 
 ## Resetting between demos
 
-To re-run the "non-delegated user delegates → backfill decrypts" beat, the demo
-users need to start **un-delegated**:
+Just run **`npm run demo:reset`** (covered at the top). It re-delegates the cohort
+(→ cleartext history) and provisions a *fresh* non-delegated subject (→ pending),
+then prints the addresses to use. It's idempotent, and after you delegate the
+subject on camera it automatically advances to the next fresh subject next time.
 
-```bash
-npm run revoke          # revoke ALL test users' delegations on-chain (or: npm run revoke -- 0)
-```
+Then either resume the existing DB (instant) or `rm -rf .ponder` for a clean
+re-sync (~4–5 min) — both land in the same clean state.
 
-⚠️ **Two non-obvious caveats** (learned the hard way — see DECISIONS, indexer
-limitations):
+**Why a `revoke`-based reset is the wrong tool** (and why `demo:reset` provisions a
+*fresh* subject instead — two real, documented indexer limitations):
 
-1. **`rm -rf .ponder` triggers a *slow* re-sync.** A fresh DB replays the whole
-   on-chain history, and the block-interval backfill re-runs across all of it
-   (re-attempting decryption block-by-block). For a multi-day-old deployment that's
-   **several minutes to ~30 min**, not the "1–2 min" you'd hope. Start the indexer
-   well before recording, or don't clear the DB at all (see below).
+1. **A cleared `.ponder` re-sync is slow**, because Ponder replays the whole on-chain
+   history and the block-interval backfill re-runs across all of it. Worse, if you
+   *revoke* a user first, the re-sync wastes time **retrying decryptions the gateway
+   now rejects** — that's what blew a reset up to ~30 min once.
 
-2. **A cleared + re-synced DB does *not* land in a clean "all pending" state.**
-   During replay the indexer sees the *old* `DelegatedForUserDecryption` events and
-   tries to decrypt — but the **gateway checks *current* on-chain state**, where the
-   user is now revoked, so those attempts **fail** and the rows show
-   `decryptionState: failed`, not a tidy `pending_rights`. (This is itself a correct,
-   honest outcome — the API never fabricates — but it's noisy for a demo.)
+2. **A revoked-then-resynced user lands in `failed`, not `pending`.** On replay the
+   indexer sees the user's *old* `Delegated` event and tries to decrypt, but the
+   gateway checks *current* on-chain state (now revoked) and rejects → the row shows
+   `decryptionState: failed`. Honest (we never fabricate), but noisy on camera. A
+   *never-delegated* subject stays cleanly `pending` — which is why `demo:reset`
+   uses one. `npm run revoke [-- idx]` still exists if you need it.
 
-**Recommended reset (clean + fast):** keep a DB that's already synced to head and
-demo with **fresh activity** instead of a pristine re-sync:
-
-```bash
-# indexer already running and at head (users revoked, so their history shows pending/failed)
-npm run transfer -- 0 1 5     # a NEW confidential transfer → indexed as pending (user0 revoked)
-npm run delegate -- 0         # user0 delegates on camera → the new transfer decrypts live
-```
-
-This shows the exact money-shot (pending → delegate → decrypted) without the slow,
-noisy re-sync. The "re-decrypts history on a fresh sync" cost is a real
-single-process limitation; the worker-fleet design (DECISIONS / INDEXER §6) is where
-a production reset would be clean.
+Both are single-process characteristics; the worker-fleet design (DECISIONS /
+INDEXER §6) is where a production reset would be clean.

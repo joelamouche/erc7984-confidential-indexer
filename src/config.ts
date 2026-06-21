@@ -91,7 +91,7 @@ function deriveAccount(index: number): HDAccount {
   });
 }
 
-export type Role = "funder" | "deployer" | "indexerHolder" | `user${number}`;
+export type Role = "funder" | "deployer" | "indexerHolder" | `user${number}` | `subject${number}`;
 
 export interface RoleAccount {
   role: Role;
@@ -122,3 +122,15 @@ export const allRoles: RoleAccount[] = [
   accounts.indexerHolder,
   ...accounts.testUsers,
 ];
+
+/**
+ * A demo-subject account, derived *beyond* the configured test users (n ≥ 0). These
+ * are the fresh, never-delegated subjects `demo:reset` provisions for the
+ * "non-delegated user delegates → decrypts" beat (see docs/DEMO.md). Kept separate
+ * from `testUsers` so the delegated cohort and the consumable subjects don't overlap.
+ */
+export function demoSubjectAccount(n: number): RoleAccount {
+  const index = env.TEST_USER_START_INDEX + env.TEST_USER_COUNT + n;
+  const account = deriveAccount(index);
+  return { role: `subject${n}`, index, account, address: account.address };
+}

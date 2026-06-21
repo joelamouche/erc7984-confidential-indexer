@@ -1,8 +1,10 @@
 /**
  * Grant the indexer holder decrypt rights, as a partner user would.
  *
- *   npm run delegate           # user0 delegates
- *   npm run delegate -- 1      # user1 delegates
+ *   npm run delegate              # user0 delegates
+ *   npm run delegate -- 1         # user1 delegates
+ *   npm run delegate -- subject   # the fresh non-delegated subject (from demo:reset) delegates
+ *                                 # — this is the on-camera "delegate live → decrypt" beat
  *
  * Calls the ACL `delegateForUserDecryption(holder, token, expiry)` from the user's
  * own wallet (the indexer never holds the user key — the API only *builds* this tx
@@ -11,16 +13,31 @@
  * the gateway propagation window (measured ~4s on Sepolia; up to ~1–2 min worst case).
  */
 import { createWalletClient, http, maxUint64, parseGwei } from "viem";
-import { accounts, env } from "../src/config";
+import { accounts, demoSubjectAccount, env, type RoleAccount } from "../src/config";
 import { chain, publicClient } from "../src/chain";
 import { aclAbi } from "../src/abis/acl";
 
-/** Grant the indexer holder decrypt rights, signed by a test user (the delegator). */
+/** The demo's current non-delegated subject: the first one that isn't delegated yet. */
+async function currentSubject(): Promise<RoleAccount> {
+  for (let n = 0; n < 16; n++) {
+    const subject = demoSubjectAccount(n);
+    const expiry = await publicClient.readContract({
+      address: env.ACL_ADDRESS,
+      abi: aclAbi,
+      functionName: "getUserDecryptionDelegationExpirationDate",
+      args: [subject.address, accounts.indexerHolder.address, env.TOKEN_ADDRESS!],
+    });
+    if (expiry <= BigInt(Math.floor(Date.now() / 1000))) return subject;
+  }
+  throw new Error("No un-delegated demo subject found — run `npm run demo:reset` first.");
+}
+
+/** Grant the indexer holder decrypt rights, signed by a test user or the demo subject. */
 async function main() {
   if (!env.TOKEN_ADDRESS) throw new Error("TOKEN_ADDRESS not set — run `npm run deploy`.");
-  const idx = Number(process.argv[2] ?? 0);
-  const user = accounts.testUsers[idx];
-  if (!user) throw new Error(`No test user at index ${idx}`);
+  const arg = process.argv[2];
+  const user = arg === "subject" ? await currentSubject() : accounts.testUsers[Number(arg ?? 0)];
+  if (!user) throw new Error(`No test user at index ${arg}`);
   const holder = accounts.indexerHolder.address;
 
   const block = await publicClient.getBlock();
