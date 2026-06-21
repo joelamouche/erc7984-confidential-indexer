@@ -195,37 +195,49 @@ via a small DI refactor; (5) light observability + CI.
 ## SDK feedback (concrete, design-review-shaped)
 
 Three findings from actually wiring decryption in, by impact — each **verified
-against the installed source**. Full root-cause analysis, the fix-difficulty
-breakdown, and an **AI-native-SDK** section are in
-**[docs/SDK-FEEDBACK.md](docs/SDK-FEEDBACK.md)**.
+against the installed source**, each in the brief's _Fix / Unblocks / Priority_
+shape. Full root-cause analysis, the fix-difficulty breakdown, and an
+**AI-native-SDK** section are in **[docs/SDK-FEEDBACK.md](docs/SDK-FEEDBACK.md)**.
 
-1. **`node()` can't run under a bundler's SSR transform (highest).** `createWorker`
-   uses `import.meta.resolve("@zama-fhe/sdk/node")`, which Vite/esbuild SSR replaces
-   with a shim lacking `.resolve` → `__vite_ssr_import_meta__.resolve is not a
-   function`. Works in plain Node, so it reads as gremlins; the `./node` subpath is
-   also ESM-only, so you can't dodge via CJS. Their reasons are sound (worker_threads
-   for CPU-bound FHE; `import.meta.resolve` is spec-correct for pure Node) — the flaw
-   is that it assumes a non-bundler runtime, breaking the backends partners actually
-   use (Ponder / Next.js / Remix). **(a)** switch to `new Worker(new URL('./worker.js',
-   import.meta.url))` (works under SSR *and* is the bundler-native worker pattern) +
-   a `workerUrl` option + a *named* error; **(b)** unblocks in-process decryption
-   everywhere (I had to shell out to a subprocess); **(c)** #1 — a hard blocker. Fix
-   is genuinely easy; analysis in the linked doc.
-2. **Misleading errors.** An RPC 429 during the SDK's own `eth_call` surfaces as
-   `DECRYPTION_FAILED` (points you at the wrong fix), and `DelegationNotPropagatedError`
-   is — per the SDK's own docstring — a *heuristic* over a bare HTTP 500 that can
-   also be a real gateway error. **(a)** a typed `RpcRateLimitedError` + distinguish
-   propagation-lag from internal-error; **(b)** unblocks free-tier-RPC partners and
-   correct retry loops; **(c)** #2 — a guaranteed time-sink. (There's also no way to
-   *query* propagation status — you can only fail-and-retry; detail in the doc.)
-3. **Duplicate decrypt APIs + the legacy shadow.** `sdk.decryption` exposes a
-   lower-level pair (`userDecrypt` / `delegatedUserDecrypt`) *and* a convenience pair
-   (`decryptValues` / `delegatedDecryptValues`) with no "prefer this" signposting;
-   and the package wraps the legacy `relayer-sdk` whose `createInstance`/`userDecrypt`
-   shape is what every doc + LLM still emits. **(a)** one documented entrypoint +
-   `@deprecated` the rest + a migration map; **(b)** faster onboarding; **(c)** #3 —
-   a papercut that taxes every integrator (and every AI agent — see the AI-native
-   section in the linked doc).
+**1. The `node()` transport can't locate its worker inside a bundler.** Decryption
+from any bundler-based backend (Ponder, Next.js, Remix — anything on Vite/esbuild)
+throws `__vite_ssr_import_meta__.resolve is not a function`. The exact same code run
+directly with `node`/`tsx` works, so the failure looks like your own build config,
+not the SDK — which is what made it a multi-hour misattribution. Root cause
+(verified, `dist/esm/node/index.js`): the worker is located with
+`import.meta.resolve("@zama-fhe/sdk/node")`, and a bundler's SSR transform replaces
+`import.meta` with a shim that has `.url` but not `.resolve`. The `worker_threads`
+design is correct and stays; only the worker *path lookup* is at fault.
+- **Fix:** locate the worker with `import.meta.url` instead — `new Worker(new
+  URL("./relayer-sdk.node-worker.js", import.meta.url))` — which bundlers do provide
+  and which is also their native worker-asset pattern; ship a `workerUrl` escape
+  hatch + a named error first. Loses nothing (the worker is a sibling file, so the
+  export-map indirection bought nothing).
+- **Unblocks:** in-process decryption inside the backends partners actually run; I
+  had to shell decryption out to a separate plain-Node process to dodge it.
+- **Priority:** #1 — a hard blocker for the most common integration surface.
+
+**2. Errors point at the wrong fix.** An RPC 429 during the SDK's own on-chain
+`eth_call` surfaces as `DECRYPTION_FAILED` (so you "fix decryption," not the RPC);
+and `DelegationNotPropagatedError` is — per the SDK's own docstring — a *heuristic*
+over a bare HTTP 500 that "can also be an unrelated internal error." There's also no
+way to *query* whether a delegation has propagated (`isActive` reads the host chain,
+true before the gateway syncs), so you can only fail-and-retry against that heuristic.
+- **Fix:** a typed `RpcRateLimitedError` (detect 429/`-32005`); distinguish
+  propagation-lag from gateway-error; expose an `isPropagated()` check.
+- **Unblocks:** every free-tier-RPC partner, and correct (non-guessy) retry loops.
+- **Priority:** #2 — a guaranteed time-sink with a misleading trail.
+
+**3. Duplicate decrypt APIs + the legacy shadow.** `sdk.decryption` ships a
+lower-level pair (`userDecrypt` / `delegatedUserDecrypt`) *and* a convenience pair
+(`decryptValues` / `delegatedDecryptValues`) with no "prefer this" signpost; and the
+package wraps the legacy `relayer-sdk`, whose `createInstance`/`userDecrypt` shape is
+what nearly every doc + LLM still emits.
+- **Fix:** one documented entrypoint, `@deprecated` the rest, a "migrating from
+  relayer-sdk" symbol map.
+- **Unblocks:** faster onboarding for humans *and* AI agents (which can't guess the
+  canonical path — see the AI-native section in the linked doc).
+- **Priority:** #3 — a papercut, but it taxes every new integrator.
 
 ## AI assistance
 

@@ -7,104 +7,137 @@ three-line summary; this is the detail, the root-cause analysis, and an
 **AI-native-SDK** section (relevant to the role's "treat AI agents as first-class
 SDK consumers" mandate).
 
-Order is by impact: (1) the SSR/worker blocker, (2) misleading errors, (3) API
+Order is by impact: (1) the bundler/worker blocker, (2) misleading errors, (3) API
 ergonomics, then (4) AI-native surface.
 
 ---
 
-## 1. `node()` can't run under a bundler's SSR transform — highest impact
+## 1. `node()` can't find its worker inside a bundler — highest impact
 
 ### What happens
 
-Calling any decryption inside a framework that runs code through a bundler's SSR
-transform (Ponder, Next.js route handlers / server components, Remix loaders,
-SvelteKit, anything on Vite or esbuild-SSR) throws:
+Calling decryption from a backend that runs through a JS bundler — Ponder (what
+this project uses), Next.js route handlers / server components, Remix loaders,
+SvelteKit, anything built on Vite or esbuild — throws:
 
 ```
 __vite_ssr_import_meta__.resolve is not a function
 ```
 
-The same call works in plain `node`/`tsx`. So it presents as an environment
-gremlin, not an SDK issue — which is exactly why it cost the most time to diagnose.
+Run the **exact same code directly with `node` or `tsx` and it works.** Because it
+only breaks under the bundler, and the error names Vite internals rather than
+anything Zama, the natural assumption is that your own build config is wrong — so
+you debug your app, not the SDK. That misdirection is what made it expensive (we
+only resolved it by isolating decryption in a separate plain-Node process).
 
-### Root cause (verified)
+### Two independent design choices — only the second is the problem
 
-`dist/esm/node/index.js`, the Node relayer transport's `createWorker`:
+It's worth separating these up front, because the critique and the fix touch only
+one of them — and a reviewer's first instinct will be to defend the other.
+
+**Choice A — run FHE in a `worker_threads` pool. _Correct; keep it; the fix does not
+touch it._** FHE work (transport-keypair generation, ciphertext re-encryption, proof
+handling) is CPU-bound and synchronous; on the main thread it would block Node's
+event loop and stall the server. Offloading to a worker pool is the right backend
+design. **We lose none of this.**
+
+**Choice B — locate the worker file with `import.meta.resolve(...)`. _This is what
+breaks._** Verified in `dist/esm/node/index.js`:
 
 ```js
 createWorker() {
-  const base = new URL(import.meta.resolve("@zama-fhe/sdk/node"));
+  const base = new URL(import.meta.resolve("@zama-fhe/sdk/node"));   // ← the break
   return new Worker(new URL("relayer-sdk.node-worker.js", base));
 }
 ```
 
-Two facts compound:
-- The `./node` subpath is **ESM-only** (verified in `package.json` `exports`: both
-  `import` and `default` point at `dist/esm/node/index.js`; there is no CJS node
-  build). So a consumer can't sidestep via `require`.
-- Worker resolution uses **`import.meta.resolve(...)`**. A bundler's SSR transform
-  replaces `import.meta` with an internal object (`__vite_ssr_import_meta__`) that
-  exposes `url`/`env` but **not** `resolve` → `undefined` is called as a function.
+(Also verified: the `./node` subpath is **ESM-only** — `package.json` `exports` has
+no CJS build for it — so you can't sidestep via `require` either.)
 
-### Did they have a good reason? Yes — anticipate it before critiquing
+### Why they used `import.meta.resolve` — the legitimate intent (so you can pre-empt it)
 
-This is **not** a "why use workers / why use `import.meta.resolve`" critique — both
-choices are defensible:
+`import.meta.resolve(spec)` runs Node's module resolver on a specifier and returns
+its URL, honoring the package `exports` map and node_modules layout.
+`import.meta.url`, by contrast, is just the URL of the *current file*.
 
-- **`worker_threads`** is the right call. FHE work (ML-KEM transport-keypair
-  generation, ciphertext re-encryption, proof handling) is CPU-bound and blocking;
-  running it on the main thread would stall a server's event loop. Offloading to a
-  worker pool is correct backend design.
-- **`import.meta.resolve`** is the spec-compliant, modern-ESM way to locate a
-  package-relative asset robustly across install layouts (hoisting, pnpm,
-  monorepos), honoring the export map. It's stable since Node 20.6, and the SDK
-  targets Node ≥ 22. In a *pure-Node ESM* runtime this is arguably the most-correct
-  choice.
+Resolving the package's **own subpath** (`"@zama-fhe/sdk/node"`) rather than using
+`import.meta.url` is a deliberate "find the worker inside the installed package,
+wherever it lives" instinct — robust to monorepos, pnpm symlinks, and the case where
+the *consumer's* code is bundled while the SDK stays in node_modules. It's
+spec-compliant and stable since Node 20.6, and the SDK targets Node ≥ 22. **In a
+pure-Node ESM runtime it's a reasonable, even tasteful choice.** That's the steelman;
+have it ready.
 
-The flaw is narrower and real: **the worker-resolution strategy assumes a pure-Node
-ESM runtime, but a large share of the target audience consumes the SDK through a
-bundler**, where `import.meta.resolve` is unavailable (SSR) or the package-relative
-URL is lost (full bundling) — and it fails with an error that doesn't even name the
-SDK.
+### Why it breaks
 
-### How hard is it to fix? Easy → medium, with a trivial immediate mitigation
+A bundler doesn't run your ESM as-is — it transforms each module and replaces
+`import.meta` with a controlled object so it can manage resolution itself. Vite's is
+`__vite_ssr_import_meta__`; it provides `.url` (set to the module's real file URL)
+and `.env`, but deliberately **not** `.resolve` — once a bundler owns resolution, a
+runtime `resolve()` doesn't fit its model. So `import.meta.resolve(...)` becomes
+`undefined(...)`. esbuild/Turbopack behave the same way. In other words: the
+choice that is *most correct for pure Node* is exactly the one bundlers don't carry
+over.
 
-**(a) The proper fix — switch to `import.meta.url` (LOW difficulty).** The worker is
-a sibling file, so:
+### The fix — and, precisely, what it would cost
+
+**The code change is small and loses nothing of value.** Because the worker is a
+**sibling file** of `node/index.js`, the export-map indirection buys nothing here —
+the same file is reachable from `import.meta.url`, which bundlers *do* provide:
 
 ```js
 new Worker(new URL("./relayer-sdk.node-worker.js", import.meta.url));
 ```
 
-- `import.meta.url` **is** provided by Vite/esbuild SSR (unlike `.resolve`), so this
-  fixes the SSR case directly.
-- The literal `new Worker(new URL("./file.js", import.meta.url))` pattern is the one
-  that Vite/Rollup/webpack-5/Turbopack specifically detect and emit as a worker
-  asset — so it also fixes *full bundling*, not just SSR. It's the ecosystem's
-  canonical worker pattern.
-- It still works in plain Node ESM. So it's strictly better than `import.meta.resolve`
-  here (the export-map indirection buys nothing for a sibling file).
-- Residual work (the "medium" part): a cross-bundler test matrix (Vite/Next/Remix/
-  webpack) to confirm the worker asset is emitted and located everywhere.
+| Runtime | `import.meta.resolve` (today) | `import.meta.url` (fix) |
+| --- | --- | --- |
+| Plain Node (SDK in node_modules) | ✅ works | ✅ works |
+| **Bundler SSR transform** (Ponder/Next/Remix today) | ❌ `.resolve` undefined | ✅ `.url` is provided |
+| SDK statically bundled into the app | ❌ (path lost) | ✅ *if* the bundler emits the worker asset — see below |
 
-**(b) Immediate, zero-risk mitigations — ship today (TRIVIAL):**
-- Add a `node({ workerUrl })` option so a consumer can pass the worker path
-  explicitly (escape hatch for any environment).
-- **Detect and rename the failure.** Guard the `import.meta.resolve` call; if it's
-  missing, throw a *named* `ZamaWorkerResolutionError` whose message says "the
-  `node()` transport's worker couldn't be located — you're likely under a bundler
-  SSR transform; pass `workerUrl` or see <link>." This alone turns an opaque
-  multi-hour debug into a 30-second fix, even before (a) lands.
+**What we'd lose by switching: nothing real.** The only thing `import.meta.resolve`
+did beyond `import.meta.url` was resolve through the export map — which matters only
+if the worker were *not* a sibling of the module. It is a sibling, so there's no
+capability lost; the `worker_threads` architecture (Choice A, the part with the good
+reason) is untouched. If anything `import.meta.url` is *more* faithful: it points at
+the file that is actually executing, which is what you want when locating a sibling.
 
-**(c) Belt-and-suspenders:** a synchronous in-process fallback (no worker) for
-environments where a worker genuinely can't be spawned — slower, but functional
-instead of broken.
+**Why this is a "small change" but not "one commit and done" — the cross-bundler
+tail.** Shipping a worker *from inside a library* is historically the flaky corner
+of JS bundling, because each bundler discovers and emits worker assets differently:
 
-**Bottom line:** the escape hatch + named error is trivial and high-value; the
-proper `import.meta.url` switch is a small change whose only cost is cross-bundler
-test coverage. The current state forces consumers like this project to run
-decryption in a **separate spawned plain-Node process** to dodge the bundler
-entirely — which works, but is a workaround for a fixable footgun.
+- **Vite / Rollup** natively recognize the literal `new Worker(new URL("./x.js",
+  import.meta.url))` form and emit `x.js` as a separate chunk — no config.
+- **webpack 5** supports the same pattern but via its asset/worker handling, which
+  some setups must enable.
+- **esbuild** needs the worker declared as an entry point (it won't auto-emit it).
+- **Turbopack / Bun / Metro** each differ again, and configs like `ssr.noExternal`
+  or monorepo hoisting change where the emitted worker lands.
+
+So the *diff* is a few lines, but "**done**" means a **test matrix** — build a tiny
+consumer on Vite, Next.js, Remix, and webpack, run a decrypt in each, and confirm
+the worker is found and spawned — plus a per-bundler note where config is required.
+That validation + documentation is the actual cost I mean by "cross-bundler test
+coverage," not the code. It's bounded, well-trodden work, not research.
+
+### Recommendation — ship in two steps
+
+1. **Now, trivial, zero-risk:** add a `node({ workerUrl })` option (point at the
+   worker explicitly) **and** guard the resolve call — if `import.meta.resolve` is
+   absent, throw a named `ZamaWorkerResolutionError`: *"the node() worker couldn't be
+   located — you're likely under a bundler; pass `workerUrl` or see <link>."* This
+   alone converts a multi-hour misattributed debug into a 30-second fix, before any
+   deeper change lands.
+2. **Then, small + validated:** switch to the `import.meta.url` pattern, backed by
+   the cross-bundler test matrix above. (Optional belt-and-suspenders: a synchronous
+   no-worker fallback for environments where a worker can't be spawned at all —
+   slower, but functional instead of broken.)
+
+**Net for the reviewer:** a defensible original design *for a pure-Node world*; a
+narrow but real break under bundlers, which is where much of the backend audience
+lives; a fix with no architectural downside; and a clear, low-risk rollout. The
+current state forces an integrator to run decryption in a separate process to dodge
+the bundler — a workaround for an eminently fixable footgun.
 
 ---
 
