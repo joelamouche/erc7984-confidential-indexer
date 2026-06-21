@@ -25,7 +25,7 @@ The "ERC-20 view of confidential holdings" headline is the easy part. The graded
 signal lives in three places, and I optimised for them over breadth:
 
 1. **The decryption-rights lifecycle.** One holder identity ⇒ an amount isn't
-   cleartext-or-nothing; it has states (`pending_rights` → `pending_propagation` →
+   cleartext-or-nothing; it has states (`pending_decrypt` → `pending_rights` → `pending_propagation` →
    `decrypted` / `failed`). The brief is emphatic: never silently drop, and
    backfill when rights arrive later. That loop is the most interesting thing.
 2. **Transaction-lifecycle judgement** — reorgs, the async gap between "indexed"

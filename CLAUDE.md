@@ -57,7 +57,7 @@ code:
 ## Architecture in one line
 
 Ponder indexes the events → each amount handle gets an explicit
-`decryptionState` (`decrypted | pending_rights | pending_propagation | failed`) →
+`decryptionState` (`decrypted | pending_decrypt | pending_rights | pending_propagation | failed`) →
 decrypt-on-index via the SDK with the holder identity → backfill worker drains
 `pending_*` rows when delegations arrive → Hono read API serves cleartext + state.
 Full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).

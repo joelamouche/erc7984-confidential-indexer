@@ -81,8 +81,9 @@ Defined in `ponder.schema.ts`. Three tables, all reorg-managed by Ponder:
 | `delegations` | (contract, delegator) | `delegator`, `delegate`, `active`, `expiry`, `delegationCounter` | ACL `Delegated/Revoked` handlers |
 
 The load-bearing column is **`decryptionState`** on every amount-bearing row:
-`pending_rights → pending_propagation → decrypted` (or `failed`). It's a real
-enum column, queryable, and it's what the backfill worker and `/v1/health` read.
+`pending_decrypt → pending_rights → pending_propagation → decrypted` (or `failed`),
+where each `pending_*` names what we're waiting on (us / the user / the gateway).
+It's a real enum column, queryable, and it's what the backfill and `/v1/health` read.
 
 > **Customizing Ponder's DB = editing `ponder.schema.ts`.** Add a column, add a
 > table, add an index — it's drizzle. The only rule: tables declared with
@@ -107,7 +108,7 @@ for two reasons:
 So we **decouple indexing from decryption**:
 
 ```
-ConfidentialTransfer ──► transfers row (handle + pending_rights)   [fast, deterministic]
+ConfidentialTransfer ──► transfers row (handle + pending_decrypt)   [fast, deterministic]
                                   │
         Ponder `block` interval ──┴──► backfill tick:               [decoupled cadence]
             1. load a bounded batch of pending/failed rows due for retry
@@ -168,7 +169,7 @@ design is entirely about draining that backlog efficiently:
 - **Dedup by handle.** Many transfers can share an amount handle; decrypt once,
   fan the cleartext out to all rows with that handle (and cache it).
 - **Prioritise.** Drain `pending_propagation` (rights just landed) and fresh
-  `pending_rights` before old `failed` retries; balances before deep history.
+  `pending_decrypt` before old `failed` retries; balances before deep history.
 - **Idempotent + keyed by handle** so retries and reorgs are safe and a crashed
   tick simply re-runs.
 

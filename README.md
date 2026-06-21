@@ -15,9 +15,13 @@ holds **one** decryption identity. So an amount isn't cleartext-or-nothing — i
 a lifecycle the API surfaces honestly instead of hiding:
 
 ```
-indexed (pending_rights) ──user delegates──▶ pending_propagation ──gateway sync ~4s──▶ decrypted
-                                                                   └─repeated failure─▶ failed
+indexed ▶ pending_decrypt ─backfill, no rights yet─▶ pending_rights ─user delegates─▶ pending_propagation ─gateway sync ~4s─▶ decrypted
+              (or, if the holder is already entitled, pending_decrypt ─▶ decrypted directly)
 ```
+
+Each `pending_*` state names *what we're waiting on*: **us** (`pending_decrypt`,
+queued), the **user** (`pending_rights`, no rights yet), or the **gateway**
+(`pending_propagation`, grant not synced).
 
 Events the holder can't yet decrypt are **never dropped** — they're kept with an
 explicit `decryptionState`, and a backfill **decrypts them later** when a partner

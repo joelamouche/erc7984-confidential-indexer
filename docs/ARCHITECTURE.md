@@ -104,29 +104,33 @@ otherwise — see the `decryptionState` field below.
 ## Per-amount state machine
 
 Every amount handle (transfer or unwrap) carries an explicit state. This is the
-"awkward in-between" surface the brief asks us to design well.
+"awkward in-between" surface the brief asks us to design well. The three `pending_*`
+states each name **what we're waiting on** — us, the user, or the gateway.
 
 ```
-                    ┌─────────────► decrypted ◄──────────┐
-                    │ (SDK ok, or                        │ (AmountDisclosed /
- indexed ──► pending_rights        AmountDisclosed)      │  UnwrapFinalized seen)
-                    │ (NoCiphertext / DelegationNotFound) │
-                    ├──► pending_propagation ─────────────┘
-                    │   (DelegationNotPropagated; retry ~30s)
-                    └──► failed
-                        (RelayerRequestFailed / unknown; backoff retry)
+                              ┌──────────────► decrypted ◄────────────┐
+ indexed                      │ (holder is a party, or a               │ (AmountDisclosed /
+   │                          │  party delegated → SDK decrypt)         │  UnwrapFinalized
+   ▼   (backfill evaluates)   │                                         │  seen — any state)
+ pending_decrypt ─────────────┼──► pending_rights ──(user delegates)──► pending_propagation ──┘
+ (queued; waiting on US)      │   (no rights; waiting on the USER)       (grant not synced;
+                              │                                          waiting on the GATEWAY)
+                              └──► failed  (relayer/unknown error; backoff retry)
 ```
 
-- `pending_rights` → an amount whose party (`from`/`to`) hasn't delegated to the
-  holder. **Promoted event-driven:** when a `DelegatedForUserDecryption` for that
-  party is indexed on the ACL contract, its `pending_rights` rows move to
-  `pending_propagation`. (A periodic `sdk.delegations.isActive` sweep is the
-  fallback for anything missed.)
-- `pending_propagation` → rights observed on-chain but the gateway hasn't synced
-  yet (the event is immediate, decryption lags ~4s measured). Short retry loop;
-  `DelegationNotPropagatedError` keeps it here rather than failing.
-- `failed` → exponential backoff, capped retries, then surfaced as `failed` (not
-  hidden) so the partner can see the indexer couldn't decrypt.
+- `pending_decrypt` → **initial** state: indexed and queued; the backfill hasn't
+  attempted it yet. On the next tick the backfill routes it: holder-party or
+  delegated → decrypt; neither → `pending_rights`.
+- `pending_rights` → evaluated: the holder is not a party and no party has delegated.
+  **Promoted event-driven** — when a `DelegatedForUserDecryption` for that party is
+  indexed, its rows move to `pending_propagation`. The backfill does **not** poll
+  this state (no rights to retry against), so this promotion (and the
+  `AmountDisclosed`/`UnwrapFinalized` by-handle fills) is the only way out.
+- `pending_propagation` → a grant exists on-chain but the gateway hasn't synced yet
+  (~4s measured). Retried each tick; `DelegationNotPropagatedError` keeps it here
+  rather than failing, capped at `MAX_PROPAGATION_ATTEMPTS` before → `failed`.
+- `failed` → capped retries, then surfaced as `failed` (not hidden) so the partner
+  sees the indexer couldn't decrypt.
 - Cleartext from `AmountDisclosed`/`UnwrapFinalized` short-circuits straight to
   `decrypted` regardless of holder rights.
 
@@ -154,7 +158,7 @@ transfers
   from, to      address
   amountHandle  bytes32            -- the ciphertext handle (always present)
   amount        bigint?            -- cleartext when known
-  decryptionState enum: decrypted | pending_rights | pending_propagation | failed
+  decryptionState enum: decrypted | pending_decrypt | pending_rights | pending_propagation | failed
   blockNumber, blockTime, logIndex
   decryptedVia  enum?: holder | delegation | amount_disclosed | unwrap_finalized
   lastAttemptAt, attempts

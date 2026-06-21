@@ -55,10 +55,13 @@ const BATCH = 25;
 // lastAttemptAt). Stops not-yet-decryptable rows from re-consuming the batch every
 // run, so genuinely-due work isn't crowded out.
 const BACKOFF_SECONDS = 60n;
-// The states the backfill re-attempts. `pending_rights` is kept here as a safety
-// net — rows are normally promoted out of it event-driven by the ACL handler when
-// a delegation is indexed; this re-scan only catches anything the events missed.
-const PENDING: DecryptState[] = ["pending_rights", "pending_propagation", "failed"];
+// The states the backfill attempts. Deliberately NOT `pending_rights`: those are
+// rows we evaluated and hold no rights for, so polling them just burns batch slots
+// and a gateway call to re-confirm "still no rights." They leave that state only
+// event-driven — the ACL handler promotes them to `pending_propagation` when a
+// delegation is indexed (and AmountDisclosed/UnwrapFinalized can fill them by
+// handle). `pending_decrypt` is the fresh-queue; `failed`/`pending_propagation` retry.
+const PENDING: DecryptState[] = ["pending_decrypt", "pending_propagation", "failed"];
 
 /** One backfill tick: resolve who we can decrypt for, then drain pending transfers + balances. */
 export async function runBackfill(db: Context["db"], blockTime: bigint): Promise<void> {

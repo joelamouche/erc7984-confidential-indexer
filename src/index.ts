@@ -9,7 +9,7 @@
  */
 import { ponder, type Context } from "ponder:registry";
 import { transfers, balances, delegations } from "ponder:schema";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { getAddress, zeroAddress } from "viem";
 import { confidentialTokenAbi } from "./abis/confidentialToken";
 import { runBackfill } from "./backfill";
@@ -49,7 +49,7 @@ async function upsertBalanceHandle(
     account,
     balanceHandle: handle,
     balance: null,
-    decryptionState: "pending_rights" as const,
+    decryptionState: "pending_decrypt" as const, // queued; the backfill resolves rights
     updatedAtBlock: blockNumber,
     attempts: 0,
     lastAttemptAt: null,
@@ -72,7 +72,7 @@ ponder.on("ConfidentialToken:ConfidentialTransfer", async ({ event, context }) =
       to,
       amountHandle: event.args.amount,
       amount: null,
-      decryptionState: "pending_rights",
+      decryptionState: "pending_decrypt", // queued; the backfill resolves rights + decrypts
       decryptedVia: null,
       blockNumber: event.block.number,
       blockTime: event.block.timestamp,
@@ -145,17 +145,25 @@ ponder.on("Acl:DelegatedForUserDecryption", async ({ event, context }) => {
   await context.db.insert(delegations).values(row).onConflictDoUpdate(row);
   console.log(`[acl]   DELEGATION observed: ${delegator.slice(0, 8)} → holder; promoting their pending rows for backfill`);
 
-  // Event-driven promotion: this delegator's pending amounts/balances are now
-  // eligible — move them to pending_propagation and clear the backoff so the next
-  // backfill tick retries immediately (decrypt succeeds once the gateway syncs).
+  // Event-driven promotion: this delegator's not-yet-decrypted rows are now eligible.
+  // Move them to pending_propagation (we know the grant exists; the gateway just
+  // hasn't synced) and clear the backoff so the next backfill tick decrypts them
+  // once propagated. This is also the *only* path out of `pending_rights` — the
+  // backfill no longer polls that state — so it must run on every delegation.
+  const notYetDecrypted: ("pending_decrypt" | "pending_rights")[] = ["pending_decrypt", "pending_rights"];
   await context.db.sql
     .update(transfers)
     .set({ decryptionState: "pending_propagation", lastAttemptAt: null })
-    .where(and(eq(transfers.decryptionState, "pending_rights"), or(eq(transfers.from, delegator), eq(transfers.to, delegator))));
+    .where(
+      and(
+        inArray(transfers.decryptionState, notYetDecrypted),
+        or(eq(transfers.from, delegator), eq(transfers.to, delegator)),
+      ),
+    );
   await context.db.sql
     .update(balances)
     .set({ decryptionState: "pending_propagation", lastAttemptAt: null })
-    .where(and(eq(balances.decryptionState, "pending_rights"), eq(balances.account, delegator)));
+    .where(and(inArray(balances.decryptionState, notYetDecrypted), eq(balances.account, delegator)));
 });
 
 ponder.on("Acl:RevokedDelegationForUserDecryption", async ({ event, context }) => {

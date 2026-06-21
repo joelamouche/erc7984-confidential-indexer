@@ -11,7 +11,12 @@ import {
   NoCiphertextError,
 } from "@zama-fhe/sdk";
 
-export type DecryptState = "decrypted" | "pending_rights" | "pending_propagation" | "failed";
+export type DecryptState =
+  | "decrypted"
+  | "pending_decrypt" // initial: queued, the backfill hasn't attempted it yet
+  | "pending_rights"
+  | "pending_propagation"
+  | "failed";
 
 /** Map a thrown SDK error instance to the per-amount decryption state. */
 export function errorToState(err: unknown): DecryptState {

@@ -2,7 +2,7 @@
  * INTEGRATION_SLOW — the full decryption-rights transition, end to end on Sepolia.
  *
  * This is the one flow the fast matrix can't pin: a row going
- *   indexed (pending_rights) → user delegates → entitled → decrypted
+ *   indexed (pending_decrypt) → user delegates → entitled → decrypted
  * plus the matching /v1/health movement (decryptable.inFlight rises then drains).
  * It does REAL on-chain writes (mint + shield + delegate) and waits for the gateway
  * + a backfill tick, so it's gated and slow (~1–2 min) and skipped by default.
@@ -56,7 +56,7 @@ async function health(): Promise<Health> {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe.skipIf(!UP)("decryption-rights transition (INTEGRATION_SLOW)", () => {
-  it("pending_rights → delegate → decrypted, with health backlog rising then draining", async () => {
+  it("pending → delegate → decrypted, with health backlog rising then draining", async () => {
     const user = accounts.testUsers[userIdx]!;
     const token = env.TOKEN_ADDRESS!;
     const underlying = env.UNDERLYING_USD_ADDRESS!;
@@ -88,7 +88,9 @@ describe.skipIf(!UP)("decryption-rights transition (INTEGRATION_SLOW)", () => {
     await send(underlying, loadAbi("ToyUSD"), "approve", [token, amount]);
     await send(token, loadAbi("ConfidentialUSD"), "wrap", [user.address, amount]);
 
-    // 2. Before delegation: indexed but NOT decryptable → pending_rights, not dropped.
+    // 2. Before delegation: indexed but NOT decrypted — never dropped. The state is
+    //    pending_decrypt (queued) then pending_rights (evaluated: no rights); either
+    //    is a valid "awaiting, not decrypted" state here.
     let row: TransferRow | undefined;
     for (let i = 0; i < 30 && !row; i++) {
       row = await shieldRow(user.address);
@@ -96,7 +98,7 @@ describe.skipIf(!UP)("decryption-rights transition (INTEGRATION_SLOW)", () => {
     }
     expect(row, "shield must be indexed").toBeDefined();
     expect(row?.amount, "no rights yet → no cleartext").toBeNull();
-    expect(row?.decryptionState).toBe("pending_rights");
+    expect(["pending_decrypt", "pending_rights"]).toContain(row?.decryptionState);
 
     // 3. Delegate → the row becomes entitled work; health backlog should rise.
     await send(env.ACL_ADDRESS, aclAbi, "delegateForUserDecryption", [

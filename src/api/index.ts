@@ -245,15 +245,17 @@ app.get("/v1/health", async (c) => {
   const delegators = activeDelegations.map((delegation) => delegation.delegator);
 
   // Split the entitled-but-undecrypted backlog into two buckets:
-  //   inFlight = still being worked (pending_rights / pending_propagation)
+  //   inFlight = still being worked (pending_decrypt = queued, pending_propagation = syncing)
   //   failed   = exhausted the retry grace (escalateState) — a genuine problem.
+  // (pending_rights is excluded by design: an entitled row is never in pending_rights
+  // — that state means "no rights", contradictory with the delegator filter below.)
   // Decryption health keys on `failed`, NOT on block-age: a legitimate history
   // backfill (a user delegating for old transfers) transiently has very old block
   // ages while draining in seconds, so age would false-positive. `failed` only
   // appears after MAX_PROPAGATION_ATTEMPTS of real failure, so it's the honest
   // "decryption is stuck" signal. `oldestAgeSeconds` stays as consumer-facing
   // staleness info, not a health trigger.
-  const IN_FLIGHT: ("pending_rights" | "pending_propagation")[] = ["pending_rights", "pending_propagation"];
+  const IN_FLIGHT: ("pending_decrypt" | "pending_propagation")[] = ["pending_decrypt", "pending_propagation"];
   let inFlight = 0;
   let failed = 0;
   let oldestBlock: number | null = null;

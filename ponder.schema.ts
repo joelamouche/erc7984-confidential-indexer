@@ -6,11 +6,16 @@
  */
 import { onchainTable, onchainEnum } from "ponder";
 
-/** Lifecycle of a single encrypted amount handle. */
+// Lifecycle of a single encrypted amount handle. The three `pending_*` states each
+// name *what we're waiting on*, which is the whole point of surfacing them:
+//   pending_decrypt    — waiting on US: queued for the backfill's next decrypt attempt
+//   pending_rights     — waiting on the USER: we evaluated it and hold no decrypt rights
+//   pending_propagation— waiting on the GATEWAY: a fresh delegation hasn't synced yet
 export const decryptionState = onchainEnum("decryption_state", [
   "decrypted", // cleartext known (SDK decrypt, AmountDisclosed, or UnwrapFinalized)
-  "pending_rights", // holder not yet entitled; awaiting a delegation
-  "pending_propagation", // delegation observed on-chain, gateway not synced yet (~1-2 min)
+  "pending_decrypt", // indexed, queued — the backfill hasn't attempted it yet (initial state)
+  "pending_rights", // evaluated: holder is not a party and no party has delegated to it
+  "pending_propagation", // delegation observed on-chain, gateway not synced yet (~4s measured)
   "failed", // decrypt errored (network/relayer); retried with backoff
 ]);
 
